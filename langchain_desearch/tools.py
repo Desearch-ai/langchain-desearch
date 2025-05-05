@@ -30,7 +30,7 @@ class DesearchToolInput(BaseModel):
         default=False, description="Whether to stream results."
     )
 
-    @root_validator
+    @model_validator(mode="after")
     def check_tool_non_empty(cls, values):
         tools = values.get("tool")
         if not tools:
