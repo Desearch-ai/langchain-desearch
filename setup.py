@@ -1,9 +1,9 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="langchain-datura",  # Replace with your desired package name
-    version="0.1.0",  # Initial version
-    author="Datura",  # Replace with your name
+    name="langchain-desearch",  # Replace with your desired package name
+    version="1.0.0",  # Initial version
+    author="Desearch",  # Replace with your name
     author_email="your-email@example.com",  # Replace with your email
     description="LangChain integration with Datura API for search and data-fetching tools.",
     long_description=open("README.md").read(),
@@ -11,9 +11,9 @@ setup(
     url="https://github.com/Datura-ai/langchain-datura",  # Replace with your GitHub repo URL
     packages=find_packages(),
     include_package_data=True,
-       install_requires=[
+    install_requires=[
         "langchain-core==0.3.51",
-        "langchain==0.3.23", 
+        "langchain==0.3.23",
         "pydantic==2.11.3",
         "python-dotenv==1.1.0",
         "datura-py==0.0.15",

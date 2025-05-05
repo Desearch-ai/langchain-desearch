@@ -1,8 +1,8 @@
 import os
-from typing import Optional
+from typing import Optional, List, Literal
 
-from pydantic import BaseModel, Field, model_validator
-from datura_py import Datura
+from pydantic import BaseModel, Field, model_validator, root_validator
+from desearch_py import Desearch
 from langchain_core.callbacks import (
     AsyncCallbackManagerForToolRun,
     CallbackManagerForToolRun,
@@ -13,56 +13,67 @@ from langchain_core.tools.base import ArgsSchema
 
 class DesearchToolInput(BaseModel):
     prompt: str = Field(description="The search prompt or query.")
-    tool: str = Field(description="The specific tool to use (e.g., 'desearch_ai', 'desearch_web').")
-    model: str = Field(default="NOVA", description="The model to use for the search. Value should 'NOVA', 'ORBIT' or 'HORIZON'")
-    date_filter: Optional[str] = Field(default=None, description="Date filter for the search.")
-    streaming: Optional[bool] = Field(default=False, description="Whether to stream results.")
+    # tool: str = Field(description="The specific tool to use (e.g., 'desearch_ai', 'desearch_web').")
+    tool: List[
+        Literal[
+            "web", "hackernews", "reddit", "wikipedia", "youtube", "twitter", "arxiv"
+        ]
+    ] = Field(description="List of tools to use. Must include at least one tool.")
+    model: str = Field(
+        default="NOVA",
+        description="The model to use for the search. Value should 'NOVA', 'ORBIT' or 'HORIZON'",
+    )
+    date_filter: Optional[str] = Field(
+        default=None, description="Date filter for the search."
+    )
+    streaming: Optional[bool] = Field(
+        default=False, description="Whether to stream results."
+    )
+
+    @root_validator
+    def check_tool_non_empty(cls, values):
+        tools = values.get("tool")
+        if not tools:
+            raise ValueError("The 'tool' field must contain at least one valid tool.")
+        return values
 
 
 class DesearchTool(BaseTool):
     name: str = "desearch_tool"
-    description: str = "Performs different Desearch API searches like AI search, Web links search, and Twitter posts search."
+    description: str = (
+        "Performs different Desearch API searches like AI search, Web links search, and Twitter posts search."
+    )
     args_schema: ArgsSchema = DesearchToolInput
     return_direct: bool = True
 
     def _run(
         self,
         prompt: str,
-        tool: str,
+        tool: List[str],
         model: str,
         date_filter: Optional[str] = None,
         streaming: bool = False,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool synchronously."""
-        api_key = os.getenv("DATURA_API_KEY")
+        api_key = os.getenv("DESEARCH_API_KEY")
         if not api_key:
-            raise ValueError("DATURA_API_KEY environment variable not set.")
-        
-        datura = Datura(api_key=api_key)
-        if(model not in ["NOVA", "ORBIT", "HORIZON"]):
+            raise ValueError("DESEARCH_API_KEY environment variable not set.")
+
+        desearch = Desearch(api_key=api_key)
+        if model not in ["NOVA", "ORBIT", "HORIZON"]:
             raise ValueError("Model should be 'NOVA', 'ORBIT' or 'HORIZON'")
-        if(tool not in ["desearch_ai", "desearch_web"]):
-            raise ValueError("Tool should be 'desearch_ai' or 'desearch_web'")
+
         try:
-            if tool == "desearch_ai":
-                return datura.ai_search(
-                    prompt=prompt,
-                    tools=["web", "hackernews", "reddit", "wikipedia", "youtube", "twitter", "arxiv"],
-                    model=model,
-                    date_filter=date_filter,
-                    streaming=streaming,
-                )
-            elif tool == "desearch_web":
-                return datura.web_links_search(
-                    prompt=prompt,
-                    tools=["web", "hackernews", "reddit", "wikipedia", "youtube", "arxiv"],
-                    model=model,
-                )
-            else:
-                raise ValueError(f"Unsupported tool: {tool}")
+            return desearch.ai_search(
+                prompt=prompt,
+                tools=tool,
+                model=model,
+                date_filter=date_filter,
+                streaming=streaming,
+            )
         except Exception as e:
-            return f"An error occurred while calling Datura: {str(e)}"
+            return f"An error occurred while calling Desearch: {str(e)}"
 
     async def _arun(
         self,
@@ -74,18 +85,27 @@ class DesearchTool(BaseTool):
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool asynchronously."""
-        return self._run(prompt, tool, model, date_filter, streaming, run_manager=run_manager.get_sync())
+        return self._run(
+            prompt,
+            tool,
+            model,
+            date_filter,
+            streaming,
+            run_manager=run_manager.get_sync(),
+        )
 
 
 class BasicWebSearchToolInput(BaseModel):
     query: str = Field(description="The search query.")
     num: int = Field(default=10, description="Number of results to return.")
-    start: int = Field(default=1, description="The starting index for the search results.")
+    start: int = Field(
+        default=1, description="The starting index for the search results."
+    )
 
 
 class BasicWebSearchTool(BaseTool):
     name: str = "basic_web_search_tool"
-    description: str = "Performs a basic web search using Datura."
+    description: str = "Performs a basic web search using Desearch."
     args_schema: ArgsSchema = BasicWebSearchToolInput
     return_direct: bool = True
 
@@ -97,15 +117,15 @@ class BasicWebSearchTool(BaseTool):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool synchronously."""
-        api_key = os.getenv("DATURA_API_KEY")
+        api_key = os.getenv("DESEARCH_API_KEY")
         if not api_key:
-            raise ValueError("DATURA_API_KEY environment variable not set.")
-        
-        datura = Datura(api_key=api_key)
+            raise ValueError("DESEARCH_API_KEY environment variable not set.")
+
+        desearch = Desearch(api_key=api_key)
         try:
-            return datura.basic_web_search(query=query, num=num, start=start)
+            return desearch.basic_web_search(query=query, num=num, start=start)
         except Exception as e:
-            return f"An error occurred while calling Datura: {str(e)}"
+            return f"An error occurred while calling Desearch: {str(e)}"
 
     async def _arun(
         self,
@@ -126,7 +146,7 @@ class BasicTwitterSearchToolInput(BaseModel):
 
 class BasicTwitterSearchTool(BaseTool):
     name: str = "basic_twitter_search_tool"
-    description: str = "Performs a basic Twitter search using Datura."
+    description: str = "Performs a basic Twitter search using Desearch."
     args_schema: ArgsSchema = BasicTwitterSearchToolInput
     return_direct: bool = True
 
@@ -138,15 +158,15 @@ class BasicTwitterSearchTool(BaseTool):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool synchronously."""
-        api_key = os.getenv("DATURA_API_KEY")
+        api_key = os.getenv("DESEARCH_API_KEY")
         if not api_key:
-            raise ValueError("DATURA_API_KEY environment variable not set.")
-        
-        datura = Datura(api_key=api_key)
+            raise ValueError("DESEARCH_API_KEY environment variable not set.")
+
+        desearch = Desearch(api_key=api_key)
         try:
-            return datura.basic_twitter_search(query=query, sort=sort, count=count)
+            return desearch.basic_twitter_search(query=query, sort=sort, count=count)
         except Exception as e:
-            return f"An error occurred while calling Datura: {str(e)}"
+            return f"An error occurred while calling Desearch: {str(e)}"
 
     async def _arun(
         self,
@@ -175,15 +195,15 @@ class FetchTweetsByUrlsTool(BaseTool):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool synchronously."""
-        api_key = os.getenv("DATURA_API_KEY")
+        api_key = os.getenv("DESEARCH_API_KEY")
         if not api_key:
-            raise ValueError("DATURA_API_KEY environment variable not set.")
-        
-        datura = Datura(api_key=api_key)
+            raise ValueError("DESEARCH_API_KEY environment variable not set.")
+
+        desearch = Desearch(api_key=api_key)
         try:
-            return datura.twitter_by_urls(urls=urls)
+            return desearch.twitter_by_urls(urls=urls)
         except Exception as e:
-            return f"An error occurred while calling Datura: {str(e)}"
+            return f"An error occurred while calling Desearch: {str(e)}"
 
     async def _arun(
         self,
@@ -210,15 +230,15 @@ class FetchTweetsByIdTool(BaseTool):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool synchronously."""
-        api_key = os.getenv("DATURA_API_KEY")
+        api_key = os.getenv("DESEARCH_API_KEY")
         if not api_key:
-            raise ValueError("DATURA_API_KEY environment variable not set.")
-        
-        datura = Datura(api_key=api_key)
+            raise ValueError("DESEARCH_API_KEY environment variable not set.")
+
+        desearch = Desearch(api_key=api_key)
         try:
-            return datura.twitter_by_id(id=id)
+            return desearch.twitter_by_id(id=id)
         except Exception as e:
-            return f"An error occurred while calling Datura: {str(e)}"
+            return f"An error occurred while calling Desearch: {str(e)}"
 
     async def _arun(
         self,
@@ -247,15 +267,15 @@ class FetchLatestTweetsTool(BaseTool):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool synchronously."""
-        api_key = os.getenv("DATURA_API_KEY")
+        api_key = os.getenv("DESEARCH_API_KEY")
         if not api_key:
-            raise ValueError("DATURA_API_KEY environment variable not set.")
-        
-        datura = Datura(api_key=api_key)
+            raise ValueError("DESEARCH_API_KEY environment variable not set.")
+
+        desearch = Desearch(api_key=api_key)
         try:
-            return datura.latest_tweets(user=user, count=count)
+            return desearch.latest_tweets(user=user, count=count)
         except Exception as e:
-            return f"An error occurred while calling Datura: {str(e)}"
+            return f"An error occurred while calling Desearch: {str(e)}"
 
     async def _arun(
         self,
@@ -269,7 +289,9 @@ class FetchLatestTweetsTool(BaseTool):
 
 class FetchTweetsAndRepliesByUserToolInput(BaseModel):
     user: str = Field(description="The username to fetch tweets and replies from.")
-    query: Optional[str] = Field(default=None, description="Query to filter tweets and replies.")
+    query: Optional[str] = Field(
+        default=None, description="Query to filter tweets and replies."
+    )
     count: int = Field(default=10, description="Number of tweets and replies to fetch.")
 
 
@@ -287,15 +309,17 @@ class FetchTweetsAndRepliesByUserTool(BaseTool):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool synchronously."""
-        api_key = os.getenv("DATURA_API_KEY")
+        api_key = os.getenv("DESEARCH_API_KEY")
         if not api_key:
-            raise ValueError("DATURA_API_KEY environment variable not set.")
-        
-        datura = Datura(api_key=api_key)
+            raise ValueError("DESEARCH_API_KEY environment variable not set.")
+
+        desearch = Desearch(api_key=api_key)
         try:
-            return datura.tweets_and_replies_by_user(user=user, query=query, count=count)
+            return desearch.tweets_and_replies_by_user(
+                user=user, query=query, count=count
+            )
         except Exception as e:
-            return f"An error occurred while calling Datura: {str(e)}"
+            return f"An error occurred while calling Desearch: {str(e)}"
 
     async def _arun(
         self,
@@ -328,15 +352,17 @@ class FetchRepliesByPostTool(BaseTool):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool synchronously."""
-        api_key = os.getenv("DATURA_API_KEY")
+        api_key = os.getenv("DESEARCH_API_KEY")
         if not api_key:
-            raise ValueError("DATURA_API_KEY environment variable not set.")
-        
-        datura = Datura(api_key=api_key)
+            raise ValueError("DESEARCH_API_KEY environment variable not set.")
+
+        desearch = Desearch(api_key=api_key)
         try:
-            return datura.twitter_replies_post(post_id=post_id, query=query, count=count)
+            return desearch.twitter_replies_post(
+                post_id=post_id, query=query, count=count
+            )
         except Exception as e:
-            return f"An error occurred while calling Datura: {str(e)}"
+            return f"An error occurred while calling Desearch: {str(e)}"
 
     async def _arun(
         self,
@@ -369,15 +395,17 @@ class FetchRetweetsByPostTool(BaseTool):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool synchronously."""
-        api_key = os.getenv("DATURA_API_KEY")
+        api_key = os.getenv("DESEARCH_API_KEY")
         if not api_key:
-            raise ValueError("DATURA_API_KEY environment variable not set.")
-        
-        datura = Datura(api_key=api_key)
+            raise ValueError("DESEARCH_API_KEY environment variable not set.")
+
+        desearch = Desearch(api_key=api_key)
         try:
-            return datura.twitter_retweets_post(post_id=post_id, query=query, count=count)
+            return desearch.twitter_retweets_post(
+                post_id=post_id, query=query, count=count
+            )
         except Exception as e:
-            return f"An error occurred while calling Datura: {str(e)}"
+            return f"An error occurred while calling Desearch: {str(e)}"
 
     async def _arun(
         self,
@@ -406,15 +434,15 @@ class FetchTwitterUserTool(BaseTool):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Use the tool synchronously."""
-        api_key = os.getenv("DATURA_API_KEY")
+        api_key = os.getenv("DESEARCH_API_KEY")
         if not api_key:
-            raise ValueError("DATURA_API_KEY environment variable not set.")
-        
-        datura = Datura(api_key=api_key)
+            raise ValueError("DESEARCH_API_KEY environment variable not set.")
+
+        desearch = Desearch(api_key=api_key)
         try:
-            return datura.tweeter_user(user=user)
+            return desearch.tweeter_user(user=user)
         except Exception as e:
-            return f"An error occurred while calling Datura: {str(e)}"
+            return f"An error occurred while calling Desearch: {str(e)}"
 
     async def _arun(
         self,
@@ -430,11 +458,11 @@ all_tools = [
     DesearchTool,
     BasicWebSearchTool,
     BasicTwitterSearchTool,
-    FetchTweetsByUrlsTool,
-    FetchTweetsByIdTool,
-    FetchLatestTweetsTool,
-    FetchTweetsAndRepliesByUserTool,
-    FetchRepliesByPostTool,
-    FetchRetweetsByPostTool,
-    FetchTwitterUserTool,
+    # FetchTweetsByUrlsTool,
+    # FetchTweetsByIdTool,
+    # FetchLatestTweetsTool,
+    # FetchTweetsAndRepliesByUserTool,
+    # FetchRepliesByPostTool,
+    # FetchRetweetsByPostTool,
+    # FetchTwitterUserTool,
 ]

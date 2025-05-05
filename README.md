@@ -1,6 +1,6 @@
-# LangChain Datura Integration
+# LangChain Desearch Integration
 
-This project integrates the Datura API with LangChain tools to enable various search and data-fetching functionalities, such as web searches, Twitter data retrieval, and AI-powered searches.
+This project integrates the Desearch API with LangChain tools to enable various search and data-fetching functionalities, such as web searches, Twitter data retrieval, and AI-powered searches.
 
 ## Features
 
@@ -13,7 +13,7 @@ This project integrates the Datura API with LangChain tools to enable various se
 Install the package using pip:
 
 ```bash
-pip install langchain-datura
+pip install langchain-desearch
 ```
 
 ## Usage
@@ -28,7 +28,7 @@ The `search_tools` group contains tools for general-purpose searches:
 
 #### Twitter Tools
 The `twitter_tools` group contains tools specifically for Twitter-related operations:
-- `BasicTwitterSearchTool`: Perform a basic Twitter search using Datura.
+- `BasicTwitterSearchTool`: Perform a basic Twitter search using Desearch.
 - `FetchTweetsByUrlsTool`: Retrieve tweets from specific URLs.
 - `FetchTweetsByIdTool`: Fetch tweets using their unique IDs.
 - `FetchLatestTweetsTool`: Get the latest tweets from a specific user.
@@ -41,7 +41,7 @@ The `twitter_tools` group contains tools specifically for Twitter-related operat
 
 #### Using Tools
 ```python
-from langchain_datura.tools import DesearchTool, BasicWebSearchTool, BasicTwitterSearchTool
+from langchain_desearch.tools import DesearchTool, BasicWebSearchTool, BasicTwitterSearchTool
 
 # Example 1: Using DesearchTool
 tool = DesearchTool()
@@ -78,7 +78,7 @@ print(result)
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough, RunnableParallel
 from langchain_core.output_parsers import StrOutputParser
-from langchain_datura.tools import DesearchTool
+from langchain_desearch.tools import DesearchTool
 from langchain_deepseek import ChatDeepSeek
 
 # Setup Desearch Tool
@@ -138,7 +138,7 @@ print(result)
 
 #### Using the LangChain Agent
 ```python
-from langchain_datura.agent import create_search_agent
+from langchain_desearch.agent import create_search_agent
 from langchain_deepseek import ChatDeepSeek
 
 # Create a DeepSeek LLM instance
@@ -170,18 +170,18 @@ pytest tests/test_tools.py
 ```
 
 #### Real API Tests
-Run the real tests to verify the tools' functionality with the Datura API:
+Run the real tests to verify the tools' functionality with the Desearch API:
 ```bash
 pytest tests/test_tools_real.py
 ```
 
-> **Note**: Ensure you have a valid `DATURA_API_KEY` in your `.env` file before running real tests.
+> **Note**: Ensure you have a valid `DESEARCH_API_KEY` in your `.env` file before running real tests.
 
 ## Project Structure
 
 ```
-langchain_datura/
-├── langchain_datura/
+langchain_desearch/
+├── langchain_desearch/
 │   ├── __init__.py
 │   ├── tools.py
 │   ├── search_tools.py
