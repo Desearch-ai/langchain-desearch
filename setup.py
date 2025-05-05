@@ -5,10 +5,10 @@ setup(
     version="1.0.0",  # Initial version
     author="Desearch",  # Replace with your name
     author_email="your-email@example.com",  # Replace with your email
-    description="LangChain integration with Datura API for search and data-fetching tools.",
+    description="LangChain integration with Desearch API for search and data-fetching tools.",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
-    url="https://github.com/Datura-ai/langchain-datura",  # Replace with your GitHub repo URL
+    url="https://github.com/Desearch-ai/langchain-desearch",  # Replace with your GitHub repo URL
     packages=find_packages(),
     include_package_data=True,
     install_requires=[
@@ -16,7 +16,7 @@ setup(
         "langchain==0.3.23",
         "pydantic==2.11.3",
         "python-dotenv==1.1.0",
-        "datura-py==0.0.15",
+        "desearch-py==1.0.0",
         "pytest==8.3.5",
     ],
     classifiers=[
