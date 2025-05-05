@@ -1,25 +1,25 @@
 [project]
-name = "langchain-datura"
-version = "0.1.0"
-description = "LangChain integration with Datura API for search and data-fetching tools."
-readme = "README.md"
-license = {text = "MIT"}
 authors = [
-    {name = "Datura", email = "support@datura.ai"}
+  {name = "Desearch", email = "support@desearch.ai"},
 ]
-requires-python = ">=3.7"
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent"
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
 ]
 dependencies = [
-    "langchain-core>=0.1.0",
-    "datura-py>=0.1.0",
-    "langchain-deepseek>=0.1.0",
-    "python-dotenv>=0.21.0",
-    "pytest>=7.0.0"
+  "langchain-core>=0.1.0",
+  "desearch-py>=1.0.0",
+  "langchain-deepseek>=0.1.0",
+  "python-dotenv>=0.21.0",
+  "pytest>=7.0.0",
 ]
+description = "LangChain integration with Desearch API for search and data-fetching tools."
+license = {text = "MIT"}
+name = "langchain-desearch"
+readme = "README.md"
+requires-python = ">=3.7"
+version = "0.1.0"
 
 [project.urls]
-Homepage = "https://github.com/Datura-ai/langchain-datura"
+Homepage = "https://github.com/Desearch-ai/langchain-desearch"
