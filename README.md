@@ -42,12 +42,14 @@ The `twitter_tools` group contains tools specifically for Twitter-related operat
 #### Using Tools
 ```python
 from langchain_desearch.tools import DesearchTool, BasicWebSearchTool, BasicTwitterSearchTool
+from dotenv import load_dotenv
+load_dotenv()
 
 # Example 1: Using DesearchTool
 tool = DesearchTool()
 result = tool._run(
     prompt="Bittensor",
-    tool="desearch_web",
+    tool=['web'],
     model="NOVA",
     date_filter="PAST_24_HOURS",
     streaming=False
