@@ -1,7 +1,9 @@
+import asyncio
+import concurrent.futures
 import os
-from typing import Optional, List, Literal
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator, root_validator
+from pydantic import BaseModel, Field, model_validator
 from desearch_py import Desearch
 from langchain_core.callbacks import (
     AsyncCallbackManagerForToolRun,
@@ -10,10 +12,120 @@ from langchain_core.callbacks import (
 from langchain_core.tools import BaseTool
 from langchain_core.tools.base import ArgsSchema
 
+_AI_SEARCH_MODELS = ("NOVA", "ORBIT", "HORIZON")
+
+
+def _require_api_key() -> str:
+    api_key = os.getenv("DESEARCH_API_KEY")
+    if not api_key:
+        raise ValueError("DESEARCH_API_KEY environment variable not set.")
+    return api_key
+
+
+def _compact(**kwargs: Any) -> Dict[str, Any]:
+    """Drop unset optional arguments so SDK defaults stay intact."""
+    return {key: value for key, value in kwargs.items() if value is not None}
+
+
+def _to_plain(value: Any) -> Any:
+    """Convert desearch-py pydantic models into JSON-friendly values."""
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    if isinstance(value, list):
+        return [_to_plain(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _to_plain(item) for key, item in value.items()}
+    return value
+
+
+def _run_coroutine(factory: Callable[[], Awaitable[Any]]) -> Any:
+    """Run an async SDK call from sync tool code, including inside a loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(factory())
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(lambda: asyncio.run(factory())).result()
+
+
+async def _invoke_client(api_key: str, method_name: str, **kwargs: Any) -> Any:
+    client = Desearch(api_key=api_key)
+    try:
+        method = getattr(client, method_name)
+        result = await method(**kwargs)
+    finally:
+        await client.close()
+    return _to_plain(result)
+
+
+def _call_client(method_name: str, **kwargs: Any) -> Any:
+    api_key = _require_api_key()
+    try:
+        return _run_coroutine(lambda: _invoke_client(api_key, method_name, **kwargs))
+    except Exception as exc:
+        return f"An error occurred while calling Desearch: {exc}"
+
+
+async def _acall_client(method_name: str, **kwargs: Any) -> Any:
+    api_key = _require_api_key()
+    try:
+        return await _invoke_client(api_key, method_name, **kwargs)
+    except Exception as exc:
+        return f"An error occurred while calling Desearch: {exc}"
+
+
+def _limit_web_results(result: Any, num: int) -> Any:
+    if isinstance(result, dict) and isinstance(result.get("data"), list):
+        return {**result, "data": result["data"][:num]}
+    return result
+
+
+def _limit_user_posts(result: Any, count: int) -> Any:
+    if isinstance(result, dict) and isinstance(result.get("tweets"), list):
+        return {**result, "tweets": result["tweets"][:count]}
+    return result
+
+
+def _web_search_offset(start: int) -> int:
+    """Map the tool's 1-based start index onto web_search's skip offset."""
+    return max(int(start) - 1, 0)
+
+
+def _validate_ai_model(model: str) -> None:
+    if model not in _AI_SEARCH_MODELS:
+        raise ValueError("Model should be 'NOVA', 'ORBIT' or 'HORIZON'")
+
+
+def _ai_search_kwargs(
+    prompt: str,
+    tool: List[str],
+    date_filter: Optional[str],
+    count: Optional[int],
+    result_type: Optional[str],
+    system_message: Optional[str],
+    scoring_system_message: Optional[str],
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> Dict[str, Any]:
+    # Pass date_filter even when it is None. desearch-py otherwise defaults
+    # the argument to PAST_24_HOURS; an explicit None omits the filter.
+    kwargs = _compact(
+        prompt=prompt,
+        tools=tool,
+        count=count,
+        result_type=result_type,
+        system_message=system_message,
+        scoring_system_message=scoring_system_message,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    kwargs["date_filter"] = date_filter
+    return kwargs
+
 
 class DesearchToolInput(BaseModel):
     prompt: str = Field(description="The search prompt or query.")
-    # tool: str = Field(description="The specific tool to use (e.g., 'desearch_ai', 'desearch_web').")
     tool: List[
         Literal[
             "web", "hackernews", "reddit", "wikipedia", "youtube", "twitter", "arxiv"
@@ -21,21 +133,46 @@ class DesearchToolInput(BaseModel):
     ] = Field(description="List of tools to use. Must include at least one tool.")
     model: str = Field(
         default="NOVA",
-        description="The model to use for the search. Value should 'NOVA', 'ORBIT' or 'HORIZON'",
+        description=(
+            "Accepted for compatibility. Must be 'NOVA', 'ORBIT', or 'HORIZON'. "
+            "The current Desearch SDK does not send a model parameter."
+        ),
     )
     date_filter: Optional[str] = Field(
         default=None, description="Date filter for the search."
     )
     streaming: Optional[bool] = Field(
-        default=False, description="Whether to stream results."
+        default=False,
+        description=(
+            "Accepted for compatibility. desearch-py always requests a "
+            "non-streaming AI search response."
+        ),
+    )
+    count: Optional[int] = Field(
+        default=None, description="Number of results to return per source (10-200)."
+    )
+    result_type: Optional[str] = Field(
+        default=None,
+        description="Result type: ONLY_LINKS or LINKS_WITH_FINAL_SUMMARY.",
+    )
+    system_message: Optional[str] = Field(
+        default=None, description="System message for the search."
+    )
+    scoring_system_message: Optional[str] = Field(
+        default=None, description="System message used when scoring the response."
+    )
+    start_date: Optional[str] = Field(
+        default=None, description="Start date in UTC (YYYY-MM-DDTHH:MM:SSZ)."
+    )
+    end_date: Optional[str] = Field(
+        default=None, description="End date in UTC (YYYY-MM-DDTHH:MM:SSZ)."
     )
 
     @model_validator(mode="after")
-    def check_tool_non_empty(cls, values):
-        tools = values.get("tool")
-        if not tools:
+    def check_tool_non_empty(self) -> "DesearchToolInput":
+        if not self.tool:
             raise ValueError("The 'tool' field must contain at least one valid tool.")
-        return values
+        return self
 
 
 class DesearchTool(BaseTool):
@@ -50,56 +187,84 @@ class DesearchTool(BaseTool):
         self,
         prompt: str,
         tool: List[str],
-        model: str,
+        model: str = "NOVA",
         date_filter: Optional[str] = None,
         streaming: bool = False,
+        count: Optional[int] = None,
+        result_type: Optional[str] = None,
+        system_message: Optional[str] = None,
+        scoring_system_message: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool synchronously."""
-        api_key = os.getenv("DESEARCH_API_KEY")
-        if not api_key:
-            raise ValueError("DESEARCH_API_KEY environment variable not set.")
-
-        desearch = Desearch(api_key=api_key)
-        if model not in ["NOVA", "ORBIT", "HORIZON"]:
-            raise ValueError("Model should be 'NOVA', 'ORBIT' or 'HORIZON'")
-
-        try:
-            return desearch.ai_search(
-                prompt=prompt,
-                tools=tool,
-                model=model,
-                date_filter=date_filter,
-                streaming=streaming,
-            )
-        except Exception as e:
-            return f"An error occurred while calling Desearch: {str(e)}"
+        del streaming, run_manager
+        _validate_ai_model(model)
+        return _call_client(
+            "ai_search",
+            **_ai_search_kwargs(
+                prompt,
+                tool,
+                date_filter,
+                count,
+                result_type,
+                system_message,
+                scoring_system_message,
+                start_date,
+                end_date,
+            ),
+        )
 
     async def _arun(
         self,
         prompt: str,
-        tool: str,
-        model: str,
+        tool: List[str],
+        model: str = "NOVA",
         date_filter: Optional[str] = None,
         streaming: bool = False,
+        count: Optional[int] = None,
+        result_type: Optional[str] = None,
+        system_message: Optional[str] = None,
+        scoring_system_message: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool asynchronously."""
-        return self._run(
-            prompt,
-            tool,
-            model,
-            date_filter,
-            streaming,
-            run_manager=run_manager.get_sync(),
+        del streaming, run_manager
+        _validate_ai_model(model)
+        return await _acall_client(
+            "ai_search",
+            **_ai_search_kwargs(
+                prompt,
+                tool,
+                date_filter,
+                count,
+                result_type,
+                system_message,
+                scoring_system_message,
+                start_date,
+                end_date,
+            ),
         )
 
 
 class BasicWebSearchToolInput(BaseModel):
     query: str = Field(description="The search query.")
-    num: int = Field(default=10, description="Number of results to return.")
+    num: int = Field(
+        default=10,
+        description=(
+            "Maximum number of results to return. desearch-py web_search has no "
+            "result-count parameter, so this trims the returned page."
+        ),
+    )
     start: int = Field(
-        default=1, description="The starting index for the search results."
+        default=1,
+        description=(
+            "1-based index of the first result. Passed to desearch-py web_search "
+            "as a zero-based skip offset."
+        ),
     )
 
 
@@ -115,17 +280,13 @@ class BasicWebSearchTool(BaseTool):
         num: int = 10,
         start: int = 1,
         run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool synchronously."""
-        api_key = os.getenv("DESEARCH_API_KEY")
-        if not api_key:
-            raise ValueError("DESEARCH_API_KEY environment variable not set.")
-
-        desearch = Desearch(api_key=api_key)
-        try:
-            return desearch.basic_web_search(query=query, num=num, start=start)
-        except Exception as e:
-            return f"An error occurred while calling Desearch: {str(e)}"
+        del run_manager
+        result = _call_client(
+            "web_search", query=query, start=_web_search_offset(start)
+        )
+        return _limit_web_results(result, num)
 
     async def _arun(
         self,
@@ -133,15 +294,53 @@ class BasicWebSearchTool(BaseTool):
         num: int = 10,
         start: int = 1,
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool asynchronously."""
-        return self._run(query, num, start, run_manager=run_manager.get_sync())
+        del run_manager
+        result = await _acall_client(
+            "web_search", query=query, start=_web_search_offset(start)
+        )
+        return _limit_web_results(result, num)
 
 
 class BasicTwitterSearchToolInput(BaseModel):
     query: str = Field(description="The Twitter search query.")
-    sort: str = Field(default="Top", description="Sort order for the results.")
+    sort: str = Field(default="Top", description="Sort order: 'Top' or 'Latest'.")
     count: int = Field(default=10, description="Number of results to return.")
+    user: Optional[str] = Field(default=None, description="User to search for.")
+    start_date: Optional[str] = Field(
+        default=None, description="Start date in UTC (YYYY-MM-DD)."
+    )
+    end_date: Optional[str] = Field(
+        default=None, description="End date in UTC (YYYY-MM-DD)."
+    )
+    lang: Optional[str] = Field(
+        default=None, description="Language code (for example en, es, fr)."
+    )
+    verified: Optional[bool] = Field(
+        default=None, description="Filter for verified users."
+    )
+    blue_verified: Optional[bool] = Field(
+        default=None, description="Filter for blue-checkmark verified users."
+    )
+    is_quote: Optional[bool] = Field(
+        default=None, description="Include only tweets with quotes."
+    )
+    is_video: Optional[bool] = Field(
+        default=None, description="Include only tweets with videos."
+    )
+    is_image: Optional[bool] = Field(
+        default=None, description="Include only tweets with images."
+    )
+    min_retweets: Optional[int] = Field(
+        default=None, description="Minimum number of retweets."
+    )
+    min_replies: Optional[int] = Field(
+        default=None, description="Minimum number of replies."
+    )
+    min_likes: Optional[int] = Field(
+        default=None, description="Minimum number of likes."
+    )
 
 
 class BasicTwitterSearchTool(BaseTool):
@@ -155,28 +354,84 @@ class BasicTwitterSearchTool(BaseTool):
         query: str,
         sort: str = "Top",
         count: int = 10,
+        user: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        lang: Optional[str] = None,
+        verified: Optional[bool] = None,
+        blue_verified: Optional[bool] = None,
+        is_quote: Optional[bool] = None,
+        is_video: Optional[bool] = None,
+        is_image: Optional[bool] = None,
+        min_retweets: Optional[int] = None,
+        min_replies: Optional[int] = None,
+        min_likes: Optional[int] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool synchronously."""
-        api_key = os.getenv("DESEARCH_API_KEY")
-        if not api_key:
-            raise ValueError("DESEARCH_API_KEY environment variable not set.")
-
-        desearch = Desearch(api_key=api_key)
-        try:
-            return desearch.basic_twitter_search(query=query, sort=sort, count=count)
-        except Exception as e:
-            return f"An error occurred while calling Desearch: {str(e)}"
+        del run_manager
+        return _call_client(
+            "x_search",
+            **_compact(
+                query=query,
+                sort=sort,
+                count=count,
+                user=user,
+                start_date=start_date,
+                end_date=end_date,
+                lang=lang,
+                verified=verified,
+                blue_verified=blue_verified,
+                is_quote=is_quote,
+                is_video=is_video,
+                is_image=is_image,
+                min_retweets=min_retweets,
+                min_replies=min_replies,
+                min_likes=min_likes,
+            ),
+        )
 
     async def _arun(
         self,
         query: str,
         sort: str = "Top",
         count: int = 10,
+        user: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        lang: Optional[str] = None,
+        verified: Optional[bool] = None,
+        blue_verified: Optional[bool] = None,
+        is_quote: Optional[bool] = None,
+        is_video: Optional[bool] = None,
+        is_image: Optional[bool] = None,
+        min_retweets: Optional[int] = None,
+        min_replies: Optional[int] = None,
+        min_likes: Optional[int] = None,
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool asynchronously."""
-        return self._run(query, sort, count, run_manager=run_manager.get_sync())
+        del run_manager
+        return await _acall_client(
+            "x_search",
+            **_compact(
+                query=query,
+                sort=sort,
+                count=count,
+                user=user,
+                start_date=start_date,
+                end_date=end_date,
+                lang=lang,
+                verified=verified,
+                blue_verified=blue_verified,
+                is_quote=is_quote,
+                is_video=is_video,
+                is_image=is_image,
+                min_retweets=min_retweets,
+                min_replies=min_replies,
+                min_likes=min_likes,
+            ),
+        )
 
 
 class FetchTweetsByUrlsToolInput(BaseModel):
@@ -193,25 +448,19 @@ class FetchTweetsByUrlsTool(BaseTool):
         self,
         urls: list,
         run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool synchronously."""
-        api_key = os.getenv("DESEARCH_API_KEY")
-        if not api_key:
-            raise ValueError("DESEARCH_API_KEY environment variable not set.")
-
-        desearch = Desearch(api_key=api_key)
-        try:
-            return desearch.twitter_by_urls(urls=urls)
-        except Exception as e:
-            return f"An error occurred while calling Desearch: {str(e)}"
+        del run_manager
+        return _call_client("x_posts_by_urls", urls=urls)
 
     async def _arun(
         self,
         urls: list,
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool asynchronously."""
-        return self._run(urls, run_manager=run_manager.get_sync())
+        del run_manager
+        return await _acall_client("x_posts_by_urls", urls=urls)
 
 
 class FetchTweetsByIdToolInput(BaseModel):
@@ -228,25 +477,19 @@ class FetchTweetsByIdTool(BaseTool):
         self,
         id: str,
         run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool synchronously."""
-        api_key = os.getenv("DESEARCH_API_KEY")
-        if not api_key:
-            raise ValueError("DESEARCH_API_KEY environment variable not set.")
-
-        desearch = Desearch(api_key=api_key)
-        try:
-            return desearch.twitter_by_id(id=id)
-        except Exception as e:
-            return f"An error occurred while calling Desearch: {str(e)}"
+        del run_manager
+        return _call_client("x_post_by_id", id=id)
 
     async def _arun(
         self,
         id: str,
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool asynchronously."""
-        return self._run(id, run_manager=run_manager.get_sync())
+        del run_manager
+        return await _acall_client("x_post_by_id", id=id)
 
 
 class FetchLatestTweetsToolInput(BaseModel):
@@ -265,26 +508,22 @@ class FetchLatestTweetsTool(BaseTool):
         user: str,
         count: int = 10,
         run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool synchronously."""
-        api_key = os.getenv("DESEARCH_API_KEY")
-        if not api_key:
-            raise ValueError("DESEARCH_API_KEY environment variable not set.")
-
-        desearch = Desearch(api_key=api_key)
-        try:
-            return desearch.latest_tweets(user=user, count=count)
-        except Exception as e:
-            return f"An error occurred while calling Desearch: {str(e)}"
+        del run_manager
+        return _limit_user_posts(_call_client("x_user_posts", username=user), count)
 
     async def _arun(
         self,
         user: str,
         count: int = 10,
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool asynchronously."""
-        return self._run(user, count, run_manager=run_manager.get_sync())
+        del run_manager
+        return _limit_user_posts(
+            await _acall_client("x_user_posts", username=user), count
+        )
 
 
 class FetchTweetsAndRepliesByUserToolInput(BaseModel):
@@ -307,19 +546,12 @@ class FetchTweetsAndRepliesByUserTool(BaseTool):
         query: Optional[str] = None,
         count: int = 10,
         run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool synchronously."""
-        api_key = os.getenv("DESEARCH_API_KEY")
-        if not api_key:
-            raise ValueError("DESEARCH_API_KEY environment variable not set.")
-
-        desearch = Desearch(api_key=api_key)
-        try:
-            return desearch.tweets_and_replies_by_user(
-                user=user, query=query, count=count
-            )
-        except Exception as e:
-            return f"An error occurred while calling Desearch: {str(e)}"
+        del run_manager
+        return _call_client(
+            "x_user_replies", **_compact(user=user, query=query, count=count)
+        )
 
     async def _arun(
         self,
@@ -327,9 +559,12 @@ class FetchTweetsAndRepliesByUserTool(BaseTool):
         query: Optional[str] = None,
         count: int = 10,
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool asynchronously."""
-        return self._run(user, query, count, run_manager=run_manager.get_sync())
+        del run_manager
+        return await _acall_client(
+            "x_user_replies", **_compact(user=user, query=query, count=count)
+        )
 
 
 class FetchRepliesByPostToolInput(BaseModel):
@@ -350,19 +585,12 @@ class FetchRepliesByPostTool(BaseTool):
         query: Optional[str] = None,
         count: int = 10,
         run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool synchronously."""
-        api_key = os.getenv("DESEARCH_API_KEY")
-        if not api_key:
-            raise ValueError("DESEARCH_API_KEY environment variable not set.")
-
-        desearch = Desearch(api_key=api_key)
-        try:
-            return desearch.twitter_replies_post(
-                post_id=post_id, query=query, count=count
-            )
-        except Exception as e:
-            return f"An error occurred while calling Desearch: {str(e)}"
+        del run_manager
+        return _call_client(
+            "x_post_replies", **_compact(post_id=post_id, query=query, count=count)
+        )
 
     async def _arun(
         self,
@@ -370,20 +598,26 @@ class FetchRepliesByPostTool(BaseTool):
         query: Optional[str] = None,
         count: int = 10,
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool asynchronously."""
-        return self._run(post_id, query, count, run_manager=run_manager.get_sync())
+        del run_manager
+        return await _acall_client(
+            "x_post_replies", **_compact(post_id=post_id, query=query, count=count)
+        )
 
 
 class FetchRetweetsByPostToolInput(BaseModel):
     post_id: str = Field(description="The ID of the post to fetch retweets for.")
     query: Optional[str] = Field(default=None, description="Query to filter retweets.")
     count: int = Field(default=10, description="Number of retweets to fetch.")
+    cursor: Optional[str] = Field(
+        default=None, description="Pagination cursor for the retweeter list."
+    )
 
 
 class FetchRetweetsByPostTool(BaseTool):
     name: str = "fetch_retweets_by_post_tool"
-    description: str = "Fetch retweets of a specific post."
+    description: str = "Fetch users who retweeted a specific post."
     args_schema: ArgsSchema = FetchRetweetsByPostToolInput
     return_direct: bool = True
 
@@ -392,30 +626,28 @@ class FetchRetweetsByPostTool(BaseTool):
         post_id: str,
         query: Optional[str] = None,
         count: int = 10,
+        cursor: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool synchronously."""
-        api_key = os.getenv("DESEARCH_API_KEY")
-        if not api_key:
-            raise ValueError("DESEARCH_API_KEY environment variable not set.")
-
-        desearch = Desearch(api_key=api_key)
-        try:
-            return desearch.twitter_retweets_post(
-                post_id=post_id, query=query, count=count
-            )
-        except Exception as e:
-            return f"An error occurred while calling Desearch: {str(e)}"
+        # query and count stay in the signature for older callers. The current
+        # SDK pages retweeters by id and cursor.
+        del query, count, run_manager
+        return _call_client("x_post_retweeters", **_compact(id=post_id, cursor=cursor))
 
     async def _arun(
         self,
         post_id: str,
         query: Optional[str] = None,
         count: int = 10,
+        cursor: Optional[str] = None,
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool asynchronously."""
-        return self._run(post_id, query, count, run_manager=run_manager.get_sync())
+        del query, count, run_manager
+        return await _acall_client(
+            "x_post_retweeters", **_compact(id=post_id, cursor=cursor)
+        )
 
 
 class FetchTwitterUserToolInput(BaseModel):
@@ -432,37 +664,16 @@ class FetchTwitterUserTool(BaseTool):
         self,
         user: str,
         run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool synchronously."""
-        api_key = os.getenv("DESEARCH_API_KEY")
-        if not api_key:
-            raise ValueError("DESEARCH_API_KEY environment variable not set.")
-
-        desearch = Desearch(api_key=api_key)
-        try:
-            return desearch.tweeter_user(user=user)
-        except Exception as e:
-            return f"An error occurred while calling Desearch: {str(e)}"
+        del run_manager
+        return _call_client("x_user_posts", username=user)
 
     async def _arun(
         self,
         user: str,
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
-    ) -> str:
+    ) -> Any:
         """Use the tool asynchronously."""
-        return self._run(user, run_manager=run_manager.get_sync())
-
-
-# Export all tools
-# all_tools = [
-#     DesearchTool,
-#     BasicWebSearchTool,
-#     BasicTwitterSearchTool,
-#     # FetchTweetsByUrlsTool,
-#     # FetchTweetsByIdTool,
-#     # FetchLatestTweetsTool,
-#     # FetchTweetsAndRepliesByUserTool,
-#     # FetchRepliesByPostTool,
-#     # FetchRetweetsByPostTool,
-#     # FetchTwitterUserTool,
-# ]
+        del run_manager
+        return await _acall_client("x_user_posts", username=user)

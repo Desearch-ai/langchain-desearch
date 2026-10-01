@@ -3,11 +3,10 @@ import sys
 import pytest
 
 # Add the project root directory to sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 # Fetch real API key from environment variable
 real_api_key = os.getenv("DESEARCH_API_KEY")
-print("Real API Key:", real_api_key)
 
 # Skip the tests if no valid API key is found.
 if not real_api_key:
@@ -106,17 +105,11 @@ def test_all_tools(tool_name, input_data):
         pytest.skip(f"Skipping test for tool '{tool_name}' due to error: {e}")
 
 
-# Test case for invalid tool input for DesearchTool.
-def test_invalid_tool():
+def test_invalid_model():
     tool = DesearchTool()
-    input_data = {
-        "prompt": "test prompt",
-        "tool": "nonexistent",  # invalid tool parameter
-        "model": "NOVA",
-        "date_filter": None,
-        "streaming": False,
-        "query": None,
-    }
-    result = tool._run(**input_data)
-    # Since _run() catches exceptions, we check that the message indicates an unsupported tool.
-    assert "Unsupported tool: nonexistent" in result
+    with pytest.raises(ValueError, match="Model should be"):
+        tool._run(
+            prompt="test prompt",
+            tool=["web"],
+            model="nonexistent",
+        )
