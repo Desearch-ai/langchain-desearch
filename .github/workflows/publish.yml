@@ -1,33 +1,141 @@
 name: Publish to PyPI
 
 on:
-  push:
-    branches:
-      - main # Change this to your desired branch
+  release:
+    types: [published]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    environment: prod
-
     steps:
       - name: Check out the code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v7
         with:
-          python-version: "3.x" # Specify your Python version
+          python-version: "3.x"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install setuptools wheel twine
+      - name: Install build
+        run: python -m pip install build
 
-      - name: Build and publish
+      - name: Build a binary wheel and a source tarball
+        run: python -m build
+
+      - name: Check built version matches release tag
         env:
-          TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
-          TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          python setup.py sdist bdist_wheel
-          twine upload dist/*
+          python - <<'PY'
+          import os
+          import sys
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          def version_from_metadata(text: str, source: str) -> str:
+              for line in text.splitlines():
+                  if line.startswith("Version:"):
+                      return line.split(":", 1)[1].strip()
+              print(f"Version field missing from {source}", file=sys.stderr)
+              sys.exit(1)
+
+          dist = Path("dist")
+          files = sorted(path for path in dist.iterdir() if path.is_file())
+          if not files:
+              print("No distribution files were built in dist/", file=sys.stderr)
+              sys.exit(1)
+
+          versions: dict[str, str] = {}
+          for path in files:
+              if path.name.endswith(".whl"):
+                  with zipfile.ZipFile(path) as archive:
+                      metadata_name = next(
+                          name
+                          for name in archive.namelist()
+                          if name.endswith(".dist-info/METADATA")
+                      )
+                      versions[path.name] = version_from_metadata(
+                          archive.read(metadata_name).decode(),
+                          path.name,
+                      )
+              elif path.name.endswith(".tar.gz"):
+                  with tarfile.open(path) as archive:
+                      member = next(
+                          item
+                          for item in archive.getmembers()
+                          if item.name.endswith("/PKG-INFO")
+                      )
+                      extracted = archive.extractfile(member)
+                      if extracted is None:
+                          print(f"Could not read PKG-INFO from {path.name}", file=sys.stderr)
+                          sys.exit(1)
+                      versions[path.name] = version_from_metadata(
+                          extracted.read().decode(),
+                          path.name,
+                      )
+              else:
+                  print(f"Unexpected file in dist/: {path.name}", file=sys.stderr)
+                  sys.exit(1)
+
+          built = set(versions.values())
+          print("Built distributions:")
+          for name, version in versions.items():
+              print(f"  {name}: {version}")
+
+          if len(built) != 1:
+              print(f"Built artifacts do not share one version: {versions}", file=sys.stderr)
+              sys.exit(1)
+
+          built_version = next(iter(built))
+          if os.environ["EVENT_NAME"] != "release":
+              print(
+                  f"workflow_dispatch: built version {built_version} "
+                  "(no release tag to compare)"
+              )
+              sys.exit(0)
+
+          tag = os.environ.get("RELEASE_TAG", "")
+          expected = tag.removeprefix("v")
+          if not expected or built_version != expected:
+              print(
+                  f"Built version {built_version} does not match release tag "
+                  f"{tag!r} (expected {expected!r})",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print(f"Built version {built_version} matches release tag {tag}")
+          PY
+
+      - name: Check distributions with twine
+        run: |
+          python -m pip install twine
+          twine check dist/*
+
+      - name: Upload distribution packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: prod
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Download distribution packages
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish distribution to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
