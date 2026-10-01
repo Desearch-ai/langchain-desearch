@@ -34,7 +34,7 @@ The `twitter_tools` group contains tools specifically for Twitter-related operat
 - `FetchLatestTweetsTool`: Get the latest tweets from a specific user.
 - `FetchTweetsAndRepliesByUserTool`: Retrieve tweets and replies from a user.
 - `FetchRepliesByPostTool`: Fetch replies to a specific Twitter post.
-- `FetchRetweetsByPostTool`: Retrieve retweets of a specific post.
+- `FetchRetweetsByPostTool`: Retrieve users who retweeted a specific post.
 - `FetchTwitterUserTool`: Get detailed information about a Twitter user.
 
 ### Examples
@@ -95,7 +95,7 @@ document_prompt = PromptTemplate.from_template("""
 
 # Retrieval chain using DesearchTool
 def get_desearch_context(prompt: str) -> str:
-    return desearch_tool._run(prompt=prompt, tool="desearch_web", model="NOVA")
+    return desearch_tool._run(prompt=prompt, tool=["web"], model="NOVA")
 
 retrieval_chain = RunnableLambda(lambda query: {
     "result": get_desearch_context(query)
@@ -168,13 +168,13 @@ print(f"Agent Response: {response['output']}")
 #### Dummy Tests
 Run the dummy tests to verify the tools' functionality with mocked data:
 ```bash
-pytest tests/test_tools.py
+pytest tests/unit_tests
 ```
 
 #### Real API Tests
 Run the real tests to verify the tools' functionality with the Desearch API:
 ```bash
-pytest tests/test_tools_real.py
+pytest tests/integration_tests
 ```
 
 > **Note**: Ensure you have a valid `DESEARCH_API_KEY` in your `.env` file before running real tests.
