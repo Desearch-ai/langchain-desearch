@@ -7,6 +7,7 @@ This project integrates the Desearch API with LangChain tools to enable various 
 - **Grouped Tools**:
   - **Search Tools**: General-purpose search tools for AI, web, and Twitter searches.
   - **Twitter Tools**: Tools specifically for Twitter-related operations.
+  - **People Tools**: Find people on X, LinkedIn, YouTube and TikTok who match a plain-language description, and browse everyone your searches found.
 
 ## Installation
 
@@ -36,6 +37,13 @@ The `twitter_tools` group contains tools specifically for Twitter-related operat
 - `FetchRepliesByPostTool`: Fetch replies to a specific Twitter post.
 - `FetchRetweetsByPostTool`: Retrieve users who retweeted a specific post.
 - `FetchTwitterUserTool`: Get detailed information about a Twitter user.
+
+#### People Tools
+The `people_tools` group contains the [People Search](https://www.desearch.ai/docs/guide/apis/people-search) tools:
+- `PeopleSearchTool` (`people_search_tool`): Start a People Search on `x`, `linkedin`, `youtube` or `tiktok` and wait for it. Returns compact people: name, handle, url, platform, audience, location, fit score, why they matched, contacts and links.
+- `PeopleProfilesTool` (`people_profiles_tool`): List the people your earlier searches found on one platform, with filters (`has=["email"]`, audience range, minimum score, location, verified) and sorting. Free.
+
+> **Billing and timing**: `people_search_tool` is billed. Starting a search reserves `count` profiles (5-200) at the route price; you pay only for the profiles it delivers, and a search that finds no one is free. A search runs in the background for 1-5 minutes. The tool waits up to `timeout` seconds (default 300), then returns the people found so far with the `task_id`. Call it again with only `task_id` to keep waiting: that is free and does not start a new search. `people_tools` is kept out of `search_tools`, so `create_search_agent` never starts a billed search.
 
 ### Examples
 
@@ -74,6 +82,55 @@ result = tool._run(
 )
 print(result)
 ```
+
+#### Using People Search
+```python
+from langchain_desearch.tools import PeopleSearchTool, PeopleProfilesTool
+from dotenv import load_dotenv
+load_dotenv()
+
+# Start a billed search and wait up to 5 minutes for it.
+people = PeopleSearchTool().invoke({
+    "query": "Indie hackers building in public who share their MRR",
+    "platform": "x",
+    "count": 25,
+    "min_score": 60,
+    "min_followers": 1000,
+    "timeout": 300,
+})
+print(people["status"], len(people["people"]))
+for person in people["people"]:
+    print(person["handle"], person.get("audience"), person.get("why"))
+
+# Still running? Keep waiting on the same search (free, nothing new is billed).
+if not people["done"]:
+    people = PeopleSearchTool().invoke({"task_id": people["task_id"], "timeout": 300})
+
+# Browse everyone your X searches found who has a public email (free).
+library = PeopleProfilesTool().invoke({
+    "platform": "x",
+    "has": ["email"],
+    "min_audience": 1000,
+    "sort": "score",
+    "limit": 25,
+})
+print(library["total"], library.get("next_cursor"))
+```
+
+Platform filters for `people_search_tool`:
+
+| Platform | Filters |
+| --- | --- |
+| `x` | `min_followers`, `max_followers`, `verified_only`, `countries`, `keywords`, `exclude_keywords` |
+| `linkedin` | `min_followers`, `max_followers`, `countries`, `keywords`, `exclude_keywords` |
+| `youtube` | `min_subscribers`, `max_subscribers`, `countries`, `require_contact`, `keywords`, `exclude_keywords` |
+| `tiktok` | `min_followers`, `max_followers`, `require_contact`, `keywords`, `exclude_keywords` |
+
+A filter that does not apply to the platform is rejected before any request is sent, so nothing is billed. Every search also takes `count`, `min_score`, `exclude` (handles to leave out) and `idempotency_key` (sending the same key again returns the first search instead of billing a new one).
+
+To give an agent the People tools, pass `people_tools` from `langchain_desearch.search_tools` to your agent. Like the other tools, they set `return_direct=True`; create them with `PeopleSearchTool(return_direct=False)` if the agent should read the result and keep going.
+
+> People Search calls the `/desearch/people` routes over HTTP with aiohttp, because the People Search methods in `desearch-py` arrive in 1.4.0, which is not on PyPI yet. The tools will switch to the SDK once it is published.
 
 #### Using RAG (Retrieval-Augmented Generation)
 ```python
@@ -186,6 +243,7 @@ langchain_desearch/
 ├── langchain_desearch/
 │   ├── __init__.py
 │   ├── tools.py
+│   ├── people.py
 │   ├── search_tools.py
 │   ├── agent.py
 ├── examples/
