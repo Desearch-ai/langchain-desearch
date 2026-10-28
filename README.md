@@ -8,6 +8,7 @@ This project integrates the Desearch API with LangChain tools to enable various 
   - **Search Tools**: General-purpose search tools for AI, web, and Twitter searches.
   - **Twitter Tools**: Tools specifically for Twitter-related operations.
   - **People Tools**: Find people on X, LinkedIn, YouTube and TikTok who match a plain-language description, and browse everyone your searches found.
+  - **Company Tools**: Find companies that match a plain-language description, or enrich the domains you have, with public emails, phones, social profiles and leaders.
 
 ## Installation
 
@@ -44,6 +45,15 @@ The `people_tools` group contains the [People Search](https://www.desearch.ai/do
 - `PeopleProfilesTool` (`people_profiles_tool`): List the people your earlier searches found on one platform, with filters (`has=["email"]`, audience range, minimum score, location, verified) and sorting. Free.
 
 > **Billing and timing**: `people_search_tool` is billed. Starting a search reserves `count` profiles (5-200) at the route price; you pay only for the profiles it delivers, and a search that finds no one is free. A search runs in the background for 1-5 minutes. The tool waits up to `timeout` seconds (default 300), then returns the people found so far with the `task_id`. Call it again with only `task_id` to keep waiting: that is free and does not start a new search. `people_tools` is kept out of `search_tools`, so `create_search_agent` never starts a billed search.
+
+#### Company Tools
+The `company_tools` group contains the [Company Search](https://www.desearch.ai/docs/guide/apis/company-search) tools:
+- `CompanySearchTool` (`company_search_tool`): Start a Company Search from a plain-language description and wait for it. Returns compact companies: domain, name, url, location, fit score and why it matched, primary email and contact, public emails, phones and social profiles (each with the page it came from), and leaders with their LinkedIn profiles and emails.
+- `CompanyEnrichTool` (`company_enrich_tool`): Start a Company Enrich for 1-200 domains you already have and wait for it. Same company fields, one company per domain, with no fit score (`score` is `None`).
+- `CompanyTasksTool` (`company_tasks_tool`): List your Company Search and Company Enrich tasks, newest first, filtered by `type` (`search` or `enrich`), `status` and `metadata`. Free.
+- `CompanyTaskControlTool` (`company_task_control_tool`): Pause, resume or cancel a company task (`action`). Free.
+
+> **Billing and timing**: `company_search_tool` and `company_enrich_tool` are billed. Company Search reserves `count` companies (5-200) and Company Enrich one company per domain, at the route's per-company price ([prices](https://desearch.ai/pricing)); you pay only for the companies a task delivers (at least 2 for Company Search and 1 for Company Enrich when it delivers any), and a task that delivers none is free. A task runs in the background for minutes. The tools wait up to `timeout` seconds (default 300), then return the companies delivered so far with the `task_id`. Call either tool again with only `task_id` to keep waiting: that is free and does not start a new task. `company_tools` is kept out of `search_tools`, so `create_search_agent` never starts a billed task.
 
 ### Examples
 
@@ -131,6 +141,49 @@ A filter that does not apply to the platform is rejected before any request is s
 To give an agent the People tools, pass `people_tools` from `langchain_desearch.search_tools` to your agent. Like the other tools, they set `return_direct=True`; create them with `PeopleSearchTool(return_direct=False)` if the agent should read the result and keep going.
 
 > People Search calls the `/desearch/people` routes over HTTP with aiohttp, because the People Search methods in `desearch-py` arrive in 1.4.0, which is not on PyPI yet. The tools will switch to the SDK once it is published.
+
+#### Using Company Search
+```python
+from langchain_desearch.tools import (
+    CompanyEnrichTool,
+    CompanySearchTool,
+    CompanyTasksTool,
+)
+from dotenv import load_dotenv
+load_dotenv()
+
+# Start a billed Company Search and wait up to 5 minutes for it.
+companies = CompanySearchTool().invoke({
+    "query": "Series A fintech startups in Berlin building payment infrastructure",
+    "count": 25,
+    "countries": ["DE"],
+    "require": ["email"],
+    "metadata": {"campaign": "q4-outbound"},
+    "idempotency_key": "q4-berlin-fintech",
+    "timeout": 300,
+})
+print(companies["status"], len(companies["companies"]))
+for company in companies["companies"]:
+    print(company["domain"], company.get("score"), company.get("primary_email"))
+
+# Still running? Keep waiting on the same task (free, nothing new is billed).
+if not companies["done"]:
+    companies = CompanySearchTool().invoke({"task_id": companies["task_id"], "timeout": 300})
+
+# Contacts and leaders for domains you already have (billed, one company per domain).
+enriched = CompanyEnrichTool().invoke({"domains": ["acme.com", "https://www.beta.io/about"]})
+
+# Your company tasks for one campaign (free).
+tasks = CompanyTasksTool().invoke({"metadata": {"campaign": "q4-outbound"}})
+```
+
+`company_search_tool` also takes `min_score`, `exclude` (domains or URLs to leave out, up to 1000), `countries` (ISO codes or names, up to 20) and `require` (`email`, `phone`, `linkedin`, `leader`, `leader_email`: a company without all of them is not delivered or billed). Both start tools take `roles` (`ceo`, `founder`, `cto`, `cfo`, `coo`, `cmo`, `president`, `owner`, `managing_director`; default `ceo`, `founder`, `cto`, `cfo`), `infer_emails` and `verify_emails` (both default true), `metadata` (your own labels) and `idempotency_key`. Values the API would reject are refused before any request is sent, so nothing is billed.
+
+Each company has `enrichment` with a `status` (`partial` while any stage, such as leaders, inferred emails or email checks, is still `pending`, then `complete`) and each stage. A stage cut by the task's time limit is `skipped`, with an `enrichment.errors` entry and the task's `enrichment_time_limit` warning. The tools read every company again on each call, so they return the latest version. A finished task has `completion_reason`, `coverage_limited` (when a budget stopped it before `count`) and `warnings`, such as `planning_fallback`, `ai_scoring_unavailable`, `enrichment_time_limit` or `linkedin_verification_unavailable`. A People Search `task_id` does not work on the company tools, and a company `task_id` does not work on `people_search_tool`.
+
+To give an agent the Company tools, pass `company_tools` from `langchain_desearch.search_tools` to your agent. Like the other tools, they set `return_direct=True`; create them with `CompanySearchTool(return_direct=False)` if the agent should read the result and keep going.
+
+> Company Search calls the `/desearch/companies` routes over HTTP with aiohttp, because the Company Search methods in `desearch-py` arrive in 1.8.0, which is not on PyPI yet. The tools will switch to the SDK once it is published.
 
 #### Using RAG (Retrieval-Augmented Generation)
 ```python
@@ -244,6 +297,7 @@ langchain_desearch/
 │   ├── __init__.py
 │   ├── tools.py
 │   ├── people.py
+│   ├── companies.py
 │   ├── search_tools.py
 │   ├── agent.py
 ├── examples/

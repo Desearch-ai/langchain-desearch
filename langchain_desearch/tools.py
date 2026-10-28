@@ -12,6 +12,15 @@ from langchain_core.callbacks import (
 from langchain_core.tools import BaseTool
 from langchain_core.tools.base import ArgsSchema
 
+from langchain_desearch.companies import (
+    COMPANY_API_BASE_URL,
+    CompanyClient,
+    company_enrich_body,
+    company_search_body,
+    control_company_task,
+    list_company_tasks,
+    run_company_task,
+)
 from langchain_desearch.people import (
     PEOPLE_API_BASE_URL,
     PeopleClient,
@@ -1137,4 +1146,638 @@ class PeopleProfilesTool(BaseTool):
             min_score=min_score,
             location=location,
             verified=verified,
+        )
+
+
+# ─── Company Search ──────────────────────────────────────────────────────────
+#
+# desearch-py ships Company Search in 1.8.0, which is not on PyPI yet, so these
+# tools call the /desearch/companies routes over HTTP (see companies.py).
+
+_CompanyRole = Literal[
+    "ceo",
+    "founder",
+    "cto",
+    "cfo",
+    "coo",
+    "cmo",
+    "president",
+    "owner",
+    "managing_director",
+]
+_CompanyRequirement = Literal["email", "phone", "linkedin", "leader", "leader_email"]
+_CompanyTaskStatus = Literal[
+    "queued",
+    "running",
+    "pausing",
+    "paused",
+    "cancelling",
+    "completed",
+    "partial",
+    "failed",
+    "cancelled",
+    "expired",
+]
+
+_COMPANY_SEARCH_TOOL = "company_search_tool"
+_COMPANY_ENRICH_TOOL = "company_enrich_tool"
+_COMPANY_TASKS_TOOL = "company_tasks_tool"
+_COMPANY_CONTROL_TOOL = "company_task_control_tool"
+
+_ROLES_DESCRIPTION = (
+    "Leaders to find: ceo, founder, cto, cfo, coo, cmo, president, owner, "
+    "managing_director. Default ceo, founder, cto, cfo."
+)
+_INFER_EMAILS_DESCRIPTION = (
+    "Guess leaders' emails from the company's address pattern (default true). "
+    "Inferred emails say source 'inferred' and have a confidence."
+)
+_VERIFY_EMAILS_DESCRIPTION = "Check every email: syntax, mail server and web (default true)."
+_METADATA_DESCRIPTION = (
+    "Your own labels for the task, for example {'campaign': 'q4-outbound'}: up to 10 "
+    "keys of 1-40 characters (a-z, 0-9, '_', '.', '-'), string values up to 200 "
+    "characters. They do not change what is found or what it costs."
+)
+_IDEMPOTENCY_DESCRIPTION = (
+    "Any unique string. Sending the same key again returns the first task "
+    "instead of starting and billing a new one."
+)
+_TIMEOUT_DESCRIPTION = (
+    "Seconds to wait for the task to finish (default 300). If it is still "
+    "running, the companies delivered so far are returned with the task_id."
+)
+_TASK_ID_DESCRIPTION = (
+    "task_id of a Company Search or Company Enrich task started earlier. Waits on "
+    "that task and returns its companies instead of starting a new one. Free."
+)
+
+
+async def _invoke_companies(
+    api_key: str, base_url: str, operation: Callable[..., Awaitable[Any]], **kwargs: Any
+) -> Any:
+    async with CompanyClient(api_key, base_url) as client:
+        return await operation(client, **kwargs)
+
+
+def _call_companies(
+    api_key: str, base_url: str, operation: Callable[..., Awaitable[Any]], **kwargs: Any
+) -> Any:
+    try:
+        return _run_coroutine(
+            lambda: _invoke_companies(api_key, base_url, operation, **kwargs)
+        )
+    except Exception as exc:
+        return _people_error(exc)
+
+
+async def _acall_companies(
+    api_key: str, base_url: str, operation: Callable[..., Awaitable[Any]], **kwargs: Any
+) -> Any:
+    try:
+        return await _invoke_companies(api_key, base_url, operation, **kwargs)
+    except Exception as exc:
+        return _people_error(exc)
+
+
+class _CompanyTaskTool(BaseTool):
+    """Shared start-or-wait logic of company_search_tool and company_enrich_tool."""
+
+    return_direct: bool = True
+    base_url: str = COMPANY_API_BASE_URL
+    poll_interval: float = 5.0
+
+    def _task_kwargs(
+        self,
+        kind: str,
+        body: Optional[Dict[str, Any]],
+        idempotency_key: Optional[str],
+        timeout: int,
+        task_id: Optional[str],
+    ) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {
+            "tool_name": self.name,
+            "control_tool_name": _COMPANY_CONTROL_TOOL,
+            "timeout": timeout,
+            "poll_interval": self.poll_interval,
+        }
+        if task_id:
+            return {**kwargs, "task_id": task_id}
+        return {
+            **kwargs,
+            "kind": kind,
+            "body": body,
+            "idempotency_key": idempotency_key,
+        }
+
+
+class CompanySearchToolInput(BaseModel):
+    query: Optional[str] = Field(
+        default=None,
+        min_length=3,
+        max_length=1000,
+        description=(
+            "The companies to find, in plain language: what they do, where, how far "
+            "along. For example 'Series A fintech startups in Berlin building payment "
+            "infrastructure'. Required to start a search."
+        ),
+    )
+    count: int = Field(
+        default=25,
+        ge=5,
+        le=200,
+        description=(
+            "How many companies to deliver (5-200). The task reserves this many at the "
+            "Company Search price and bills only the companies it delivers."
+        ),
+    )
+    min_score: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description="Only deliver companies with at least this fit score (0-100).",
+    )
+    exclude: Optional[List[str]] = Field(
+        default=None,
+        max_length=1000,
+        description=(
+            "Companies to leave out, as domains or URLs, for example ones you already "
+            "contacted (up to 1000)."
+        ),
+    )
+    countries: Optional[List[str]] = Field(
+        default=None,
+        max_length=20,
+        description=(
+            "Where the companies should be: ISO codes or country names, for example "
+            "['DE', 'Austria'] (up to 20)."
+        ),
+    )
+    require: Optional[List[_CompanyRequirement]] = Field(
+        default=None,
+        description=(
+            "Only deliver companies that have all of these: email, phone, linkedin (the "
+            "company's LinkedIn page), leader (one of roles), leader_email (a leader with "
+            "an email). A company without them is not delivered or billed."
+        ),
+    )
+    roles: Optional[List[_CompanyRole]] = Field(
+        default=None, description=_ROLES_DESCRIPTION
+    )
+    infer_emails: Optional[bool] = Field(
+        default=None, description=_INFER_EMAILS_DESCRIPTION
+    )
+    verify_emails: Optional[bool] = Field(
+        default=None, description=_VERIFY_EMAILS_DESCRIPTION
+    )
+    metadata: Optional[Dict[str, str]] = Field(
+        default=None, description=_METADATA_DESCRIPTION
+    )
+    idempotency_key: Optional[str] = Field(
+        default=None, max_length=200, description=_IDEMPOTENCY_DESCRIPTION
+    )
+    timeout: int = Field(default=300, ge=0, le=1800, description=_TIMEOUT_DESCRIPTION)
+    task_id: Optional[str] = Field(default=None, description=_TASK_ID_DESCRIPTION)
+
+    @model_validator(mode="after")
+    def check_search_or_task(self) -> "CompanySearchToolInput":
+        if self.task_id:
+            return self
+        if not self.query:
+            raise ValueError(
+                "Set query to start a Company Search, or task_id to keep waiting on one."
+            )
+        # Refuse values the API would reject before anything is billed.
+        company_search_body(
+            self.query,
+            countries=self.countries,
+            require=self.require,
+            roles=self.roles,
+            metadata=self.metadata,
+        )
+        return self
+
+
+class CompanySearchTool(_CompanyTaskTool):
+    name: str = _COMPANY_SEARCH_TOOL
+    description: str = (
+        "Finds companies on the web that match a plain-language description (for "
+        "example 'Series A fintech startups in Berlin building payment infrastructure') "
+        "and returns compact companies: domain, name, url, location, fit score and why "
+        "it matched, primary email and contact, public emails, phones and social "
+        "profiles with the page each came from, and leaders (CEO, founders, CTO, CFO by "
+        "default) with their LinkedIn profiles and emails. BILLED: starting a search "
+        "reserves `count` companies at the Company Search price; you pay only for the "
+        "companies it delivers (a minimum of 2 when it delivers any), and a search "
+        "that delivers none is free. SLOW: it runs in the background for minutes. This "
+        "tool waits up to `timeout` seconds, then returns the companies delivered so "
+        "far and the task_id. To keep waiting, call it again with only task_id (free; "
+        "it does not start or bill a new search). For domains you already have, use "
+        "company_enrich_tool."
+    )
+    args_schema: ArgsSchema = CompanySearchToolInput
+
+    def _search_kwargs(
+        self,
+        query: Optional[str],
+        count: int,
+        min_score: Optional[int],
+        exclude: Optional[List[str]],
+        countries: Optional[List[str]],
+        require: Optional[List[str]],
+        roles: Optional[List[str]],
+        infer_emails: Optional[bool],
+        verify_emails: Optional[bool],
+        metadata: Optional[Dict[str, str]],
+        idempotency_key: Optional[str],
+        timeout: int,
+        task_id: Optional[str],
+    ) -> Dict[str, Any]:
+        body = None
+        if not task_id:
+            if not query:
+                raise ValueError(
+                    "Set query to start a Company Search, or task_id to keep waiting on one."
+                )
+            body = company_search_body(
+                query,
+                count=count,
+                min_score=min_score,
+                exclude=exclude,
+                countries=countries,
+                require=require,
+                roles=roles,
+                infer_emails=infer_emails,
+                verify_emails=verify_emails,
+                metadata=metadata,
+            )
+        return self._task_kwargs("search", body, idempotency_key, timeout, task_id)
+
+    def _run(
+        self,
+        query: Optional[str] = None,
+        count: int = 25,
+        min_score: Optional[int] = None,
+        exclude: Optional[List[str]] = None,
+        countries: Optional[List[str]] = None,
+        require: Optional[List[str]] = None,
+        roles: Optional[List[str]] = None,
+        infer_emails: Optional[bool] = None,
+        verify_emails: Optional[bool] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        idempotency_key: Optional[str] = None,
+        timeout: int = 300,
+        task_id: Optional[str] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        kwargs = self._search_kwargs(
+            query,
+            count,
+            min_score,
+            exclude,
+            countries,
+            require,
+            roles,
+            infer_emails,
+            verify_emails,
+            metadata,
+            idempotency_key,
+            timeout,
+            task_id,
+        )
+        return _call_companies(_require_api_key(), self.base_url, run_company_task, **kwargs)
+
+    async def _arun(
+        self,
+        query: Optional[str] = None,
+        count: int = 25,
+        min_score: Optional[int] = None,
+        exclude: Optional[List[str]] = None,
+        countries: Optional[List[str]] = None,
+        require: Optional[List[str]] = None,
+        roles: Optional[List[str]] = None,
+        infer_emails: Optional[bool] = None,
+        verify_emails: Optional[bool] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        idempotency_key: Optional[str] = None,
+        timeout: int = 300,
+        task_id: Optional[str] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        kwargs = self._search_kwargs(
+            query,
+            count,
+            min_score,
+            exclude,
+            countries,
+            require,
+            roles,
+            infer_emails,
+            verify_emails,
+            metadata,
+            idempotency_key,
+            timeout,
+            task_id,
+        )
+        return await _acall_companies(
+            _require_api_key(), self.base_url, run_company_task, **kwargs
+        )
+
+
+class CompanyEnrichToolInput(BaseModel):
+    domains: Optional[List[str]] = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description=(
+            "1-200 company domains or URLs, for example ['acme.com', "
+            "'https://www.beta.io/about']. Each is reduced to its host without www.; "
+            "duplicates are removed. Required to start an enrichment."
+        ),
+    )
+    roles: Optional[List[_CompanyRole]] = Field(
+        default=None, description=_ROLES_DESCRIPTION
+    )
+    infer_emails: Optional[bool] = Field(
+        default=None, description=_INFER_EMAILS_DESCRIPTION
+    )
+    verify_emails: Optional[bool] = Field(
+        default=None, description=_VERIFY_EMAILS_DESCRIPTION
+    )
+    metadata: Optional[Dict[str, str]] = Field(
+        default=None, description=_METADATA_DESCRIPTION
+    )
+    idempotency_key: Optional[str] = Field(
+        default=None, max_length=200, description=_IDEMPOTENCY_DESCRIPTION
+    )
+    timeout: int = Field(default=300, ge=0, le=1800, description=_TIMEOUT_DESCRIPTION)
+    task_id: Optional[str] = Field(default=None, description=_TASK_ID_DESCRIPTION)
+
+    @model_validator(mode="after")
+    def check_domains_or_task(self) -> "CompanyEnrichToolInput":
+        if self.task_id:
+            return self
+        if not self.domains:
+            raise ValueError(
+                "Set domains to start a Company Enrich, or task_id to keep waiting on one."
+            )
+        company_enrich_body(self.domains, roles=self.roles, metadata=self.metadata)
+        return self
+
+
+class CompanyEnrichTool(_CompanyTaskTool):
+    name: str = _COMPANY_ENRICH_TOOL
+    description: str = (
+        "Collects public contact data for companies you already know, by domain: one "
+        "company per domain with name, url, location, primary email and contact, public "
+        "emails, phones and social profiles with the page each came from, and leaders "
+        "(CEO, founders, CTO, CFO by default) with their LinkedIn profiles and emails. "
+        "No fit score (score is null). BILLED: starting it reserves one company per "
+        "domain at the Company Enrich price; you pay only for the companies it delivers "
+        "(a minimum of 1), and a task that delivers none is free. SLOW: it runs in the "
+        "background for minutes. This tool waits up to `timeout` seconds, then returns "
+        "the companies delivered so far and the task_id. To keep waiting, call it again "
+        "with only task_id (free; it does not start or bill a new task). To find "
+        "companies from a description, use company_search_tool."
+    )
+    args_schema: ArgsSchema = CompanyEnrichToolInput
+
+    def _enrich_kwargs(
+        self,
+        domains: Optional[List[str]],
+        roles: Optional[List[str]],
+        infer_emails: Optional[bool],
+        verify_emails: Optional[bool],
+        metadata: Optional[Dict[str, str]],
+        idempotency_key: Optional[str],
+        timeout: int,
+        task_id: Optional[str],
+    ) -> Dict[str, Any]:
+        body = None
+        if not task_id:
+            if not domains:
+                raise ValueError(
+                    "Set domains to start a Company Enrich, or task_id to keep waiting on one."
+                )
+            body = company_enrich_body(
+                domains,
+                roles=roles,
+                infer_emails=infer_emails,
+                verify_emails=verify_emails,
+                metadata=metadata,
+            )
+        return self._task_kwargs("enrich", body, idempotency_key, timeout, task_id)
+
+    def _run(
+        self,
+        domains: Optional[List[str]] = None,
+        roles: Optional[List[str]] = None,
+        infer_emails: Optional[bool] = None,
+        verify_emails: Optional[bool] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        idempotency_key: Optional[str] = None,
+        timeout: int = 300,
+        task_id: Optional[str] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        kwargs = self._enrich_kwargs(
+            domains,
+            roles,
+            infer_emails,
+            verify_emails,
+            metadata,
+            idempotency_key,
+            timeout,
+            task_id,
+        )
+        return _call_companies(_require_api_key(), self.base_url, run_company_task, **kwargs)
+
+    async def _arun(
+        self,
+        domains: Optional[List[str]] = None,
+        roles: Optional[List[str]] = None,
+        infer_emails: Optional[bool] = None,
+        verify_emails: Optional[bool] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        idempotency_key: Optional[str] = None,
+        timeout: int = 300,
+        task_id: Optional[str] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        kwargs = self._enrich_kwargs(
+            domains,
+            roles,
+            infer_emails,
+            verify_emails,
+            metadata,
+            idempotency_key,
+            timeout,
+            task_id,
+        )
+        return await _acall_companies(
+            _require_api_key(), self.base_url, run_company_task, **kwargs
+        )
+
+
+class CompanyTasksToolInput(BaseModel):
+    type: Optional[Literal["search", "enrich"]] = Field(
+        default=None,
+        description="Only Company Search ('search') or only Company Enrich ('enrich') tasks.",
+    )
+    status: Optional[List[_CompanyTaskStatus]] = Field(
+        default=None,
+        description="Only tasks in these statuses, for example ['running', 'paused'].",
+    )
+    limit: int = Field(default=20, ge=1, le=100, description="Tasks per page (1-100).")
+    cursor: Optional[str] = Field(
+        default=None,
+        description="next_cursor from the previous page. Keep the same filters when you page.",
+    )
+    metadata: Optional[Dict[str, str]] = Field(
+        default=None,
+        description=(
+            "Only tasks whose metadata has all of these labels (exact match, up to 3), "
+            "for example {'campaign': 'q4-outbound'}."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def check_metadata_filters(self) -> "CompanyTasksToolInput":
+        if self.metadata and len(self.metadata) > 3:
+            raise ValueError("Filter by at most 3 metadata labels.")
+        return self
+
+
+class CompanyTasksTool(BaseTool):
+    name: str = _COMPANY_TASKS_TOOL
+    description: str = (
+        "Lists your Desearch Company Search and Company Enrich tasks, newest first, "
+        "with status, counts, cost, why each ended task stopped (completion_reason, "
+        "coverage_limited), warnings and metadata labels. Filter by type (search or "
+        "enrich), status and metadata. Use it to find a task_id, then read the task's "
+        "companies with company_search_tool or company_enrich_tool and only task_id. "
+        "Free and instant: it never starts a task. People Search tasks are not listed."
+    )
+    args_schema: ArgsSchema = CompanyTasksToolInput
+    return_direct: bool = True
+    base_url: str = COMPANY_API_BASE_URL
+
+    def _run(
+        self,
+        type: Optional[str] = None,
+        status: Optional[List[str]] = None,
+        limit: int = 20,
+        cursor: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return _call_companies(
+            _require_api_key(),
+            self.base_url,
+            list_company_tasks,
+            tool_name=self.name,
+            type=type,
+            status=status,
+            limit=limit,
+            cursor=cursor,
+            metadata=metadata,
+        )
+
+    async def _arun(
+        self,
+        type: Optional[str] = None,
+        status: Optional[List[str]] = None,
+        limit: int = 20,
+        cursor: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await _acall_companies(
+            _require_api_key(),
+            self.base_url,
+            list_company_tasks,
+            tool_name=self.name,
+            type=type,
+            status=status,
+            limit=limit,
+            cursor=cursor,
+            metadata=metadata,
+        )
+
+
+class CompanyTaskControlToolInput(BaseModel):
+    task_id: str = Field(
+        min_length=1,
+        description="task_id of a Company Search or Company Enrich task.",
+    )
+    action: Literal["pause", "resume", "cancel"] = Field(
+        description=(
+            "'pause' (a running task finishes its current batch first), 'resume' (no new "
+            "charge) or 'cancel' (stops it for good; cannot be undone)."
+        )
+    )
+
+
+class CompanyTaskControlTool(BaseTool):
+    name: str = _COMPANY_CONTROL_TOOL
+    description: str = (
+        "Pauses, resumes or cancels a Desearch Company Search or Company Enrich task "
+        "and returns its updated status. Free: it charges and refunds nothing by itself. "
+        "Pause keeps the companies delivered so far and the reservation; a task paused "
+        "for more than 7 days is cancelled. Resume continues where the task stopped with "
+        "no new charge. Cancel stops it for good: you pay only for the companies it "
+        "already delivered and the rest of the reservation is returned. Cancel cannot be "
+        "undone."
+    )
+    args_schema: ArgsSchema = CompanyTaskControlToolInput
+    return_direct: bool = True
+    base_url: str = COMPANY_API_BASE_URL
+
+    def _run(
+        self,
+        task_id: str,
+        action: str,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return _call_companies(
+            _require_api_key(),
+            self.base_url,
+            control_company_task,
+            task_id=task_id,
+            action=action,
+            tool_name=_COMPANY_SEARCH_TOOL,
+            control_tool_name=self.name,
+            enrich_tool_name=_COMPANY_ENRICH_TOOL,
+        )
+
+    async def _arun(
+        self,
+        task_id: str,
+        action: str,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await _acall_companies(
+            _require_api_key(),
+            self.base_url,
+            control_company_task,
+            task_id=task_id,
+            action=action,
+            tool_name=_COMPANY_SEARCH_TOOL,
+            control_tool_name=self.name,
+            enrich_tool_name=_COMPANY_ENRICH_TOOL,
         )
