@@ -176,11 +176,12 @@ def test_people_tool_names_groups_and_descriptions():
     assert "Free" in PeopleProfilesTool().description
 
 
-def test_people_search_does_not_require_unpublished_sdk():
+def test_people_search_shares_the_package_desearch_py_requirement():
+    # People Search still calls its routes over HTTP (see people.py); the
+    # package requirement is the one the other tools need.
     for name in ("pyproject.toml", "setup.py"):
         text = (ROOT / name).read_text()
-        assert "desearch-py>=1.4" not in text
-        assert "desearch-py>=1.1.0,<2.0.0" in text
+        assert "desearch-py>=1.8.0,<2.0.0" in text
 
 
 def test_people_search_starts_waits_and_returns_compact_people(people_api):

@@ -21,7 +21,7 @@ from langchain_desearch.tools import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-DESEARCH_REQUIREMENT = "desearch-py>=1.1.0,<2.0.0"
+DESEARCH_REQUIREMENT = "desearch-py>=1.8.0,<2.0.0"
 
 
 class _FakeDesearch:
@@ -109,20 +109,36 @@ def test_public_names_stay_compatible():
         "desearch_tool",
         "basic_web_search_tool",
         "basic_twitter_search_tool",
+        "ai_web_links_search_tool",
+        "ai_x_links_search_tool",
+        "search_api_tool",
+        "web_extract_tool",
     ]
 
 
 def test_package_metadata_pins_compatible_desearch_py():
     pyproject = (ROOT / "pyproject.toml").read_text()
     setup_py = (ROOT / "setup.py").read_text()
-    assert 'version = "1.1.0"' in pyproject
-    assert 'version="1.1.0"' in setup_py
+    assert 'version = "1.2.0"' in pyproject
+    assert 'version="1.2.0"' in setup_py
     assert DESEARCH_REQUIREMENT in pyproject
     assert DESEARCH_REQUIREMENT in setup_py
     assert "desearch-py>=" in pyproject
     assert "desearch-py>=" in setup_py
     assert "<2.0.0" in pyproject
     assert "<2.0.0" in setup_py
+    # desearch-py 1.8.0 needs Python 3.10+.
+    assert 'requires-python = ">=3.10"' in pyproject
+    assert 'python_requires=">=3.10"' in setup_py
+
+
+def test_release_notes_say_desearch_py_1_8_must_be_on_pypi_first():
+    changelog = (ROOT / "CHANGELOG.md").read_text()
+    readme = (ROOT / "README.md").read_text()
+    assert "## [1.2.0]" in changelog
+    for text in (changelog, readme):
+        assert "desearch-py 1.8.0" in text
+        assert "PyPI" in text
 
 
 def _bind(method, **kwargs):
@@ -153,6 +169,25 @@ def test_installed_sdk_accepts_tool_calls():
     _bind(Desearch.x_user_replies, user="opentensor", query="tao", count=10)
     _bind(Desearch.x_post_replies, post_id="1", query=None, count=10)
     _bind(Desearch.x_post_retweeters, id="1", cursor=None)
+    _bind(Desearch.x_posts_by_user, user="elonmusk", query="tesla", count=3)
+    _bind(Desearch.x_trends, woeid=1, count=30)
+    _bind(Desearch.ai_web_links_search, prompt="Bittensor", tools=["web"], count=10)
+    _bind(Desearch.ai_x_links_search, prompt="Bittensor", count=10)
+    _bind(Desearch.extract, url="https://desearch.ai", format="text", js=False, wait=None)
+    _bind(
+        Desearch.search_api,
+        query="Bittensor",
+        mode="fast",
+        count=10,
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        highlights=True,
+        page_text=False,
+    )
+    _bind(Desearch.tiktok_search, query="ai", count=3, cursor="c", sort="s", include_metadata=True)
+    _bind(Desearch.instagram_profile_posts, username="instagram", count=3, cursor="c", include_metadata=True)
+    _bind(Desearch.facebook_comments, post_id="1", count=3, cursor="c", include_metadata=True)
+    assert not hasattr(Desearch, "search")
 
 
 def test_empty_tool_list_is_rejected_by_pydantic_v2_validator():

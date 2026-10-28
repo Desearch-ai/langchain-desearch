@@ -1,6 +1,8 @@
 import asyncio
 import concurrent.futures
 import os
+import re
+from datetime import date
 from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -19,6 +21,7 @@ from langchain_desearch.people import (
     people_search_body,
     search_people,
 )
+from langchain_desearch.social import social_page, social_request
 
 _AI_SEARCH_MODELS = ("NOVA", "ORBIT", "HORIZON")
 
@@ -685,6 +688,787 @@ class FetchTwitterUserTool(BaseTool):
         """Use the tool asynchronously."""
         del run_manager
         return await _acall_client("x_user_posts", username=user)
+
+
+class SearchTweetsByUserToolInput(BaseModel):
+    user: str = Field(
+        min_length=1,
+        description="X username whose posts to search, for example elonmusk.",
+    )
+    query: Optional[str] = Field(
+        default=None,
+        description="Words or X search operators that the user's posts must match.",
+    )
+    count: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="Number of posts to return (1-100). The API default is 10.",
+    )
+
+
+class SearchTweetsByUserTool(BaseTool):
+    name: str = "search_tweets_by_user_tool"
+    description: str = (
+        "Search the posts of one X (Twitter) user, optionally only those matching "
+        "a query. Returns a list of posts."
+    )
+    args_schema: ArgsSchema = SearchTweetsByUserToolInput
+    return_direct: bool = True
+
+    def _run(
+        self,
+        user: str,
+        query: Optional[str] = None,
+        count: Optional[int] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return _call_client(
+            "x_posts_by_user", **_compact(user=user, query=query, count=count)
+        )
+
+    async def _arun(
+        self,
+        user: str,
+        query: Optional[str] = None,
+        count: Optional[int] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await _acall_client(
+            "x_posts_by_user", **_compact(user=user, query=query, count=count)
+        )
+
+
+class FetchTwitterTrendsToolInput(BaseModel):
+    woeid: int = Field(
+        default=1,
+        description=(
+            "WOEID of the location: Worldwide is 1 (the default) and the United "
+            "States is 23424977. Only locations X publishes trends for are accepted."
+        ),
+    )
+    count: Optional[int] = Field(
+        default=None,
+        ge=30,
+        le=100,
+        description="Number of trends to return (30-100). The API default is 30.",
+    )
+
+
+class FetchTwitterTrendsTool(BaseTool):
+    name: str = "fetch_twitter_trends_tool"
+    description: str = (
+        "Fetch the trending topics on X (Twitter) for a location, by WOEID "
+        "(Worldwide is 1, the United States is 23424977). Returns the trends "
+        "with their rank and search query, and the location."
+    )
+    args_schema: ArgsSchema = FetchTwitterTrendsToolInput
+    return_direct: bool = True
+
+    def _run(
+        self,
+        woeid: int = 1,
+        count: Optional[int] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return _call_client("x_trends", **_compact(woeid=woeid, count=count))
+
+    async def _arun(
+        self,
+        woeid: int = 1,
+        count: Optional[int] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await _acall_client("x_trends", **_compact(woeid=woeid, count=count))
+
+
+# ─── AI links search ─────────────────────────────────────────────────────────
+
+
+class AIWebLinksSearchToolInput(BaseModel):
+    prompt: str = Field(min_length=1, description="What to find web links for.")
+    count: Optional[int] = Field(
+        default=None,
+        ge=10,
+        le=200,
+        description="Number of links to return (10-200). The API default is 10.",
+    )
+
+
+class AIWebLinksSearchTool(BaseTool):
+    name: str = "ai_web_links_search_tool"
+    description: str = (
+        "Use Desearch AI to find web links relevant to a prompt. Returns "
+        "search_results, a list of {title, link, snippet}, without a written "
+        "summary. To keep results to one site, put site:<domain> in the prompt."
+    )
+    args_schema: ArgsSchema = AIWebLinksSearchToolInput
+    return_direct: bool = True
+
+    def _run(
+        self,
+        prompt: str,
+        count: Optional[int] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        # Web Search is the only tool this route still runs; the retired ones
+        # are accepted by the API but dropped.
+        return _call_client(
+            "ai_web_links_search", **_compact(prompt=prompt, tools=["web"], count=count)
+        )
+
+    async def _arun(
+        self,
+        prompt: str,
+        count: Optional[int] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await _acall_client(
+            "ai_web_links_search", **_compact(prompt=prompt, tools=["web"], count=count)
+        )
+
+
+class AIXLinksSearchToolInput(BaseModel):
+    prompt: str = Field(min_length=1, description="What to find X posts about.")
+    count: Optional[int] = Field(
+        default=None,
+        ge=10,
+        le=200,
+        description="Number of posts to return (10-200). The API default is 10.",
+    )
+
+
+class AIXLinksSearchTool(BaseTool):
+    name: str = "ai_x_links_search_tool"
+    description: str = (
+        "Use Desearch AI to find X (Twitter) posts relevant to a prompt. Returns "
+        "miner_tweets, a list of full posts (text, url, author, counts, date), "
+        "without a written summary."
+    )
+    args_schema: ArgsSchema = AIXLinksSearchToolInput
+    return_direct: bool = True
+
+    def _run(
+        self,
+        prompt: str,
+        count: Optional[int] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return _call_client("ai_x_links_search", **_compact(prompt=prompt, count=count))
+
+    async def _arun(
+        self,
+        prompt: str,
+        count: Optional[int] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await _acall_client(
+            "ai_x_links_search", **_compact(prompt=prompt, count=count)
+        )
+
+
+# ─── Web extract and Search API ──────────────────────────────────────────────
+
+
+class WebExtractToolInput(BaseModel):
+    url: str = Field(
+        min_length=1, description="Public URL to read, for example https://desearch.ai."
+    )
+    format: Literal["text", "html"] = Field(
+        default="text",
+        description="'text' (the default) returns plain text; 'html' returns the HTML.",
+    )
+    js: bool = Field(
+        default=False,
+        description=(
+            "Render the page in a headless browser first, for single-page apps "
+            "and pages filled in by JavaScript. Billed at a separate tier."
+        ),
+    )
+    wait: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=30000,
+        description="Extra milliseconds to wait after the page loads (0-30000). Needs js=true.",
+    )
+
+    @model_validator(mode="after")
+    def check_wait_needs_js(self) -> "WebExtractToolInput":
+        if self.wait is not None and not self.js:
+            raise ValueError(
+                "wait only applies when js is true. Set js=true or leave wait out."
+            )
+        return self
+
+
+class WebExtractTool(BaseTool):
+    name: str = "web_extract_tool"
+    description: str = (
+        "Fetch a public web page and return its content as plain text (default) "
+        "or HTML. Set js=true for pages that need JavaScript to show their content."
+    )
+    args_schema: ArgsSchema = WebExtractToolInput
+    return_direct: bool = True
+
+    def _run(
+        self,
+        url: str,
+        format: str = "text",
+        js: bool = False,
+        wait: Optional[int] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return _call_client(
+            "extract", **_compact(url=url, format=format, js=js, wait=wait)
+        )
+
+    async def _arun(
+        self,
+        url: str,
+        format: str = "text",
+        js: bool = False,
+        wait: Optional[int] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await _acall_client(
+            "extract", **_compact(url=url, format=format, js=js, wait=wait)
+        )
+
+
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _parse_day(name: str, value: Optional[str]) -> Optional[date]:
+    if value is None:
+        return None
+    if not _ISO_DATE.match(value):
+        raise ValueError(f"{name} must be a date in YYYY-MM-DD format, got {value!r}.")
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"{name} {value!r} is not a valid date.") from None
+
+
+class SearchApiToolInput(BaseModel):
+    query: str = Field(
+        min_length=1, max_length=2000, description="What to search the web for."
+    )
+    mode: Optional[Literal["fast", "balanced"]] = Field(
+        default=None,
+        description="'fast' returns results sooner; 'balanced' (the API default) favors relevance.",
+    )
+    count: Optional[Literal[10, 15, 20]] = Field(
+        default=None, description="Number of results: 10 (the API default), 15 or 20."
+    )
+    start_date: Optional[str] = Field(
+        default=None,
+        description="Only pages published on or after this date (YYYY-MM-DD).",
+    )
+    end_date: Optional[str] = Field(
+        default=None,
+        description="Only pages published on or before this date (YYYY-MM-DD).",
+    )
+    highlights: Optional[bool] = Field(
+        default=None,
+        description="Include the passage that best matches the query (the API default is true).",
+    )
+    page_text: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Include the full text of each page (the API default is false). "
+            "Responses get much larger."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def check_dates(self) -> "SearchApiToolInput":
+        start = _parse_day("start_date", self.start_date)
+        end = _parse_day("end_date", self.end_date)
+        if start and end and start > end:
+            raise ValueError("start_date must be on or before end_date.")
+        return self
+
+
+class SearchApiTool(BaseTool):
+    name: str = "search_api_tool"
+    description: str = (
+        "Search the web and get ranked pages (url, title, published_date), each "
+        "with the passage that best matches the query. Filter by publish date; "
+        "set page_text=true for the full page text."
+    )
+    args_schema: ArgsSchema = SearchApiToolInput
+    return_direct: bool = True
+
+    def _run(
+        self,
+        query: str,
+        mode: Optional[str] = None,
+        count: Optional[int] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        highlights: Optional[bool] = None,
+        page_text: Optional[bool] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return _call_client(
+            "search_api",
+            **_compact(
+                query=query,
+                mode=mode,
+                count=count,
+                start_date=start_date,
+                end_date=end_date,
+                highlights=highlights,
+                page_text=page_text,
+            ),
+        )
+
+    async def _arun(
+        self,
+        query: str,
+        mode: Optional[str] = None,
+        count: Optional[int] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        highlights: Optional[bool] = None,
+        page_text: Optional[bool] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await _acall_client(
+            "search_api",
+            **_compact(
+                query=query,
+                mode=mode,
+                count=count,
+                start_date=start_date,
+                end_date=end_date,
+                highlights=highlights,
+                page_text=page_text,
+            ),
+        )
+
+
+# ─── TikTok, Facebook and Instagram ──────────────────────────────────────────
+#
+# One tool per platform with an ``action`` field. social.py maps each action to
+# its desearch-py method and rejects fields the action does not use. List
+# actions return {"results": [...], "next_cursor": ...}; the cursor comes from
+# the x-desearch-next-cursor header through include_metadata=True.
+
+_SOCIAL_COUNT = (
+    "List actions only: maximum number of items (1-100). The API default is 10 "
+    "for search and 20 otherwise. A page can hold fewer items without being the "
+    "last one."
+)
+_SOCIAL_CURSOR = (
+    "next_cursor from the previous page of the same action and target, sent "
+    "back unchanged. Omit it for the first page. Never build or edit a cursor."
+)
+_SOCIAL_PAGING = (
+    "Each action uses only its own fields. List actions return "
+    "{results, next_cursor}: while next_cursor is set, call again with the same "
+    "action and target and cursor=next_cursor to read the next page; it is null "
+    "on the last page."
+)
+
+
+def _social_fields(model: BaseModel) -> Dict[str, Any]:
+    return {
+        name: getattr(model, name)
+        for name in type(model).model_fields
+        if name != "action"
+    }
+
+
+def _call_social(tool_name: str, platform: str, action: str, **fields: Any) -> Any:
+    request = social_request(platform, action, **fields)
+    if not request.returns_list:
+        return _call_client(request.method, **request.kwargs)
+    result = _call_client(request.method, include_metadata=True, **request.kwargs)
+    return social_page(result, tool_name)
+
+
+async def _acall_social(
+    tool_name: str, platform: str, action: str, **fields: Any
+) -> Any:
+    request = social_request(platform, action, **fields)
+    if not request.returns_list:
+        return await _acall_client(request.method, **request.kwargs)
+    result = await _acall_client(
+        request.method, include_metadata=True, **request.kwargs
+    )
+    return social_page(result, tool_name)
+
+
+class TikTokToolInput(BaseModel):
+    action: Literal[
+        "search", "post", "profile", "profile_posts", "comments", "hashtag", "trending"
+    ] = Field(
+        description=(
+            "search: posts matching query. post: one post by id. profile: a user "
+            "by username. profile_posts: a user's posts by username. comments: "
+            "comments on a video by video_id. hashtag: posts for tag. trending: "
+            "trending posts for region."
+        )
+    )
+    query: Optional[str] = Field(
+        default=None, description="action=search: keyword or phrase."
+    )
+    sort: Optional[str] = Field(
+        default=None, description="action=search: sort option, when TikTok supports it."
+    )
+    id: Optional[str] = Field(default=None, description="action=post: TikTok video ID.")
+    username: Optional[str] = Field(
+        default=None,
+        description="action=profile or profile_posts: TikTok username, without @.",
+    )
+    video_id: Optional[str] = Field(
+        default=None,
+        description="action=comments: TikTok video ID (the id of a post).",
+    )
+    tag: Optional[str] = Field(
+        default=None, description="action=hashtag: hashtag, without #."
+    )
+    region: Optional[str] = Field(
+        default=None,
+        description="action=trending: two-letter region code. The API default is US.",
+    )
+    count: Optional[int] = Field(default=None, ge=1, le=100, description=_SOCIAL_COUNT)
+    cursor: Optional[str] = Field(
+        default=None,
+        description=(
+            f"action=search, profile_posts, comments or hashtag: {_SOCIAL_CURSOR}"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def check_action_fields(self) -> "TikTokToolInput":
+        social_request("tiktok", self.action, **_social_fields(self))
+        return self
+
+
+class TikTokTool(BaseTool):
+    name: str = "tiktok_tool"
+    description: str = (
+        "Read public TikTok data. Set action to 'search' (posts matching query), "
+        "'post' (one post by video id), 'profile' (a user by username), "
+        "'profile_posts' (a user's posts by username), 'comments' (comments on a "
+        "video by video_id, which is a post's id), 'hashtag' (posts for tag) or "
+        "'trending' (trending posts for a two-letter region, default US; one "
+        f"page, no cursor). {_SOCIAL_PAGING}"
+    )
+    args_schema: ArgsSchema = TikTokToolInput
+    return_direct: bool = True
+
+    def _run(
+        self,
+        action: str,
+        query: Optional[str] = None,
+        sort: Optional[str] = None,
+        id: Optional[str] = None,
+        username: Optional[str] = None,
+        video_id: Optional[str] = None,
+        tag: Optional[str] = None,
+        region: Optional[str] = None,
+        count: Optional[int] = None,
+        cursor: Optional[str] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return _call_social(
+            self.name,
+            "tiktok",
+            action,
+            query=query,
+            sort=sort,
+            id=id,
+            username=username,
+            video_id=video_id,
+            tag=tag,
+            region=region,
+            count=count,
+            cursor=cursor,
+        )
+
+    async def _arun(
+        self,
+        action: str,
+        query: Optional[str] = None,
+        sort: Optional[str] = None,
+        id: Optional[str] = None,
+        username: Optional[str] = None,
+        video_id: Optional[str] = None,
+        tag: Optional[str] = None,
+        region: Optional[str] = None,
+        count: Optional[int] = None,
+        cursor: Optional[str] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await _acall_social(
+            self.name,
+            "tiktok",
+            action,
+            query=query,
+            sort=sort,
+            id=id,
+            username=username,
+            video_id=video_id,
+            tag=tag,
+            region=region,
+            count=count,
+            cursor=cursor,
+        )
+
+
+class FacebookToolInput(BaseModel):
+    action: Literal[
+        "search", "post", "profile", "profile_posts", "comments", "hashtag"
+    ] = Field(
+        description=(
+            "search: Meta Ad Library ads matching query. post: one post by id. "
+            "profile: a profile or page by profile_id. profile_posts: its posts "
+            "by profile_id. comments: comments on a post by post_id. hashtag: "
+            "Meta Ad Library ads for tag."
+        )
+    )
+    query: Optional[str] = Field(
+        default=None,
+        description="action=search: Ad Library keyword, phrase or hashtag.",
+    )
+    id: Optional[str] = Field(
+        default=None, description="action=post: Facebook public post or media ID."
+    )
+    profile_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "action=profile or profile_posts: profile or page ID, username or "
+            "public handle."
+        ),
+    )
+    post_id: Optional[str] = Field(
+        default=None, description="action=comments: Facebook public post or media ID."
+    )
+    tag: Optional[str] = Field(
+        default=None, description="action=hashtag: hashtag or keyword, without #."
+    )
+    count: Optional[int] = Field(default=None, ge=1, le=100, description=_SOCIAL_COUNT)
+    cursor: Optional[str] = Field(
+        default=None,
+        description=(
+            f"action=search, profile_posts, comments or hashtag: {_SOCIAL_CURSOR}"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def check_action_fields(self) -> "FacebookToolInput":
+        social_request("facebook", self.action, **_social_fields(self))
+        return self
+
+
+class FacebookTool(BaseTool):
+    name: str = "facebook_tool"
+    description: str = (
+        "Read public Facebook data. Set action to 'search' (Meta Ad Library ads "
+        "matching query, not organic posts), 'post' (one post by id), 'profile' "
+        "(a profile or page by profile_id: ID, username or handle), "
+        "'profile_posts' (a profile's or page's posts by profile_id), 'comments' "
+        "(comments on a post by post_id; about 10 per page) or 'hashtag' (Meta "
+        f"Ad Library ads for tag). {_SOCIAL_PAGING}"
+    )
+    args_schema: ArgsSchema = FacebookToolInput
+    return_direct: bool = True
+
+    def _run(
+        self,
+        action: str,
+        query: Optional[str] = None,
+        id: Optional[str] = None,
+        profile_id: Optional[str] = None,
+        post_id: Optional[str] = None,
+        tag: Optional[str] = None,
+        count: Optional[int] = None,
+        cursor: Optional[str] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return _call_social(
+            self.name,
+            "facebook",
+            action,
+            query=query,
+            id=id,
+            profile_id=profile_id,
+            post_id=post_id,
+            tag=tag,
+            count=count,
+            cursor=cursor,
+        )
+
+    async def _arun(
+        self,
+        action: str,
+        query: Optional[str] = None,
+        id: Optional[str] = None,
+        profile_id: Optional[str] = None,
+        post_id: Optional[str] = None,
+        tag: Optional[str] = None,
+        count: Optional[int] = None,
+        cursor: Optional[str] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await _acall_social(
+            self.name,
+            "facebook",
+            action,
+            query=query,
+            id=id,
+            profile_id=profile_id,
+            post_id=post_id,
+            tag=tag,
+            count=count,
+            cursor=cursor,
+        )
+
+
+class InstagramToolInput(BaseModel):
+    action: Literal[
+        "search", "post", "profile", "profile_posts", "comments", "hashtag"
+    ] = Field(
+        description=(
+            "search: profiles matching query. post: one post by id. profile: a "
+            "user by username. profile_posts: a user's posts by username. "
+            "comments: comments on a post by shortcode. hashtag: posts for tag."
+        )
+    )
+    query: Optional[str] = Field(
+        default=None, description="action=search: keyword, username or phrase."
+    )
+    id: Optional[str] = Field(
+        default=None,
+        description="action=post: post shortcode, media ID or public post URL.",
+    )
+    username: Optional[str] = Field(
+        default=None,
+        description="action=profile or profile_posts: Instagram username, without @.",
+    )
+    shortcode: Optional[str] = Field(
+        default=None,
+        description=(
+            "action=comments: the post shortcode, the code in "
+            "instagram.com/p/<shortcode>/. Numeric media IDs return 404."
+        ),
+    )
+    tag: Optional[str] = Field(
+        default=None, description="action=hashtag: hashtag, without #."
+    )
+    count: Optional[int] = Field(default=None, ge=1, le=100, description=_SOCIAL_COUNT)
+    cursor: Optional[str] = Field(
+        default=None,
+        description=f"action=profile_posts, comments or hashtag: {_SOCIAL_CURSOR}",
+    )
+
+    @model_validator(mode="after")
+    def check_action_fields(self) -> "InstagramToolInput":
+        social_request("instagram", self.action, **_social_fields(self))
+        return self
+
+
+class InstagramTool(BaseTool):
+    name: str = "instagram_tool"
+    description: str = (
+        "Read public Instagram data. Set action to 'search' (profiles matching "
+        "query; one page, no cursor), 'post' (one post by id: shortcode, media ID "
+        "or post URL), 'profile' (a user by username), 'profile_posts' (a user's "
+        "posts by username), 'comments' (comments on a post by shortcode, the "
+        "code in instagram.com/p/<shortcode>/) or 'hashtag' (posts for tag). "
+        f"{_SOCIAL_PAGING}"
+    )
+    args_schema: ArgsSchema = InstagramToolInput
+    return_direct: bool = True
+
+    def _run(
+        self,
+        action: str,
+        query: Optional[str] = None,
+        id: Optional[str] = None,
+        username: Optional[str] = None,
+        shortcode: Optional[str] = None,
+        tag: Optional[str] = None,
+        count: Optional[int] = None,
+        cursor: Optional[str] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return _call_social(
+            self.name,
+            "instagram",
+            action,
+            query=query,
+            id=id,
+            username=username,
+            shortcode=shortcode,
+            tag=tag,
+            count=count,
+            cursor=cursor,
+        )
+
+    async def _arun(
+        self,
+        action: str,
+        query: Optional[str] = None,
+        id: Optional[str] = None,
+        username: Optional[str] = None,
+        shortcode: Optional[str] = None,
+        tag: Optional[str] = None,
+        count: Optional[int] = None,
+        cursor: Optional[str] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await _acall_social(
+            self.name,
+            "instagram",
+            action,
+            query=query,
+            id=id,
+            username=username,
+            shortcode=shortcode,
+            tag=tag,
+            count=count,
+            cursor=cursor,
+        )
 
 
 # ─── People Search ───────────────────────────────────────────────────────────
