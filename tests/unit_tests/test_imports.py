@@ -4,6 +4,17 @@ EXPECTED_ALL = [
     "DesearchTool",
     "BasicWebSearchTool",
     "BasicTwitterSearchTool",
+    "AIWebLinksSearchTool",
+    "AIXLinksSearchTool",
+    "SearchApiTool",
+    "WebExtractTool",
+    "SearchTweetsByUserTool",
+    "FetchTwitterTrendsTool",
+    "TikTokTool",
+    "FacebookTool",
+    "InstagramTool",
+    "PeopleSearchTool",
+    "PeopleProfilesTool",
 ]
 
 
