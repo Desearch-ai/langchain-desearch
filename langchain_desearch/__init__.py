@@ -4,6 +4,10 @@ from langchain_desearch.tools import (
     BasicTwitterSearchTool,
     PeopleSearchTool,
     PeopleProfilesTool,
+    CompanySearchTool,
+    CompanyEnrichTool,
+    CompanyTasksTool,
+    CompanyTaskControlTool,
 )
 
 __all__ = [
@@ -12,4 +16,8 @@ __all__ = [
     "BasicTwitterSearchTool",
     "PeopleSearchTool",
     "PeopleProfilesTool",
+    "CompanySearchTool",
+    "CompanyEnrichTool",
+    "CompanyTasksTool",
+    "CompanyTaskControlTool",
 ]

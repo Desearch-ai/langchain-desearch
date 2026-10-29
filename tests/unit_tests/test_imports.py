@@ -6,6 +6,10 @@ EXPECTED_ALL = [
     "BasicTwitterSearchTool",
     "PeopleSearchTool",
     "PeopleProfilesTool",
+    "CompanySearchTool",
+    "CompanyEnrichTool",
+    "CompanyTasksTool",
+    "CompanyTaskControlTool",
 ]
 
 

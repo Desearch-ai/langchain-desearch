@@ -115,8 +115,8 @@ def test_public_names_stay_compatible():
 def test_package_metadata_pins_compatible_desearch_py():
     pyproject = (ROOT / "pyproject.toml").read_text()
     setup_py = (ROOT / "setup.py").read_text()
-    assert 'version = "1.1.0"' in pyproject
-    assert 'version="1.1.0"' in setup_py
+    assert 'version = "1.2.0"' in pyproject
+    assert 'version="1.2.0"' in setup_py
     assert DESEARCH_REQUIREMENT in pyproject
     assert DESEARCH_REQUIREMENT in setup_py
     assert "desearch-py>=" in pyproject
