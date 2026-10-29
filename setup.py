@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="langchain-desearch",  # Replace with your desired package name
-    version="1.0.7",
+    version="1.1.0",
     author="Desearch",  # Replace with your name
     author_email="your-email@example.com",  # Replace with your email
     description="LangChain integration with Desearch API for search and data-fetching tools.",
@@ -17,6 +17,7 @@ setup(
         "pydantic==2.11.3",
         "python-dotenv==1.1.0",
         "desearch-py>=1.1.0,<2.0.0",
+        "aiohttp>=3.8,<4.0.0",
         "pytest==8.3.5",
     ],
     classifiers=[

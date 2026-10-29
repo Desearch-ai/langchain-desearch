@@ -4,6 +4,8 @@ EXPECTED_ALL = [
     "DesearchTool",
     "BasicWebSearchTool",
     "BasicTwitterSearchTool",
+    "PeopleSearchTool",
+    "PeopleProfilesTool",
 ]
 
 
