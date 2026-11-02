@@ -257,11 +257,12 @@ def test_company_tool_names_groups_and_descriptions():
     assert "cannot be undone" in CompanyTaskControlTool().description
 
 
-def test_company_search_does_not_require_unpublished_sdk():
+def test_company_search_shares_the_package_desearch_py_requirement():
+    # Company Search calls its routes over HTTP (see companies.py); the package
+    # requirement is the one the social tools need.
     for name in ("pyproject.toml", "setup.py"):
         text = (ROOT / name).read_text()
-        assert "desearch-py>=1.8" not in text
-        assert "desearch-py>=1.1.0,<2.0.0" in text
+        assert "desearch-py>=1.11.0,<2.0.0" in text
 
 
 def test_company_search_starts_waits_and_returns_compact_companies(company_api):
