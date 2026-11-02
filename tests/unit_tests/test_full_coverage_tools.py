@@ -220,6 +220,9 @@ def test_new_tools_are_in_the_tool_groups():
         "tiktok_tool",
         "facebook_tool",
         "instagram_tool",
+        "youtube_tool",
+        "reddit_tool",
+        "threads_tool",
     ]
     # The billed People Search job never joins the general lists.
     for group in (search_tools, twitter_tools, social_tools):
@@ -230,11 +233,12 @@ def test_new_tools_are_in_the_tool_groups():
     ]
 
 
-def test_social_actions_cover_all_nineteen_endpoints():
+def test_social_actions_cover_all_thirty_five_endpoints():
     methods = {
         spec.method for actions in SOCIAL_ACTIONS.values() for spec in actions.values()
     }
-    assert len(methods) == 19
+    # 19 TikTok, Facebook and Instagram + 16 YouTube, Reddit and Threads.
+    assert len(methods) == 35
     for method in methods:
         assert inspect.iscoroutinefunction(getattr(Desearch, method)), method
     for actions in SOCIAL_ACTIONS.values():
@@ -798,8 +802,8 @@ def test_social_run_validates_without_the_schema(fake_desearch):
 
 
 def test_social_request_unknown_platform():
-    with pytest.raises(ValueError, match="Unknown platform 'youtube'"):
-        social_request("youtube", "search", query="ai")
+    with pytest.raises(ValueError, match="Unknown platform 'linkedin'"):
+        social_request("linkedin", "search", query="ai")
 
 
 def test_social_sdk_errors_are_returned_as_messages(fake_desearch):

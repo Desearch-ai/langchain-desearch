@@ -18,6 +18,9 @@ from .tools import (
     TikTokTool,
     FacebookTool,
     InstagramTool,
+    YouTubeTool,
+    RedditTool,
+    ThreadsTool,
     PeopleSearchTool,
     PeopleProfilesTool,
 )
@@ -50,11 +53,15 @@ twitter_tools = [
 ]
 
 # One tool per platform; each takes an `action` (search, post, profile,
-# profile_posts, comments, hashtag, and trending on TikTok).
+# profile_posts, comments, hashtag, and trending on TikTok; YouTube, Reddit and
+# Threads have their own actions, such as transcript or subreddit_posts).
 social_tools = [
     TikTokTool(),
     FacebookTool(),
     InstagramTool(),
+    YouTubeTool(),
+    RedditTool(),
+    ThreadsTool(),
 ]
 
 # Group People Search tools into a separate list. people_search_tool is billed

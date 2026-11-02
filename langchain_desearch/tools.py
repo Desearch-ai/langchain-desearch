@@ -1471,6 +1471,393 @@ class InstagramTool(BaseTool):
         )
 
 
+# ─── YouTube, Reddit and Threads ─────────────────────────────────────────────
+#
+# Same shape as the tools above, but these routes take no count: a page is
+# whatever the platform returns. Threads never pages. Each call is billed as
+# one request, including an empty page.
+
+
+class YouTubeToolInput(BaseModel):
+    action: Literal[
+        "search", "video", "transcript", "comments", "channel", "channel_videos"
+    ] = Field(
+        description=(
+            "search: videos, Shorts, channels or playlists matching query. video: "
+            "one video by id. transcript: a video's captions by video_id. "
+            "comments: top-level comments on a video by video_id. channel: a "
+            "channel by handle. channel_videos: a channel's uploads by handle."
+        )
+    )
+    query: Optional[str] = Field(
+        default=None,
+        description=(
+            'action=search: keyword or phrase. Use intitle:"..." for stricter '
+            "title matching."
+        ),
+    )
+    type: Optional[Literal["videos", "shorts", "channels", "playlists"]] = Field(
+        default=None,
+        description="action=search: only this kind of result. Omit for mixed results.",
+    )
+    upload_date: Optional[
+        Literal["today", "this_week", "this_month", "this_year"]
+    ] = Field(default=None, description="action=search: only videos uploaded in this window.")
+    sort_by: Optional[Literal["relevance", "popular"]] = Field(
+        default=None, description="action=search: result order."
+    )
+    duration: Optional[
+        Literal["under_3_min", "between_3_and_20_min", "over_20_min"]
+    ] = Field(default=None, description="action=search: video length (not Shorts).")
+    id: Optional[str] = Field(
+        default=None, description="action=video: video or Short ID, or its URL."
+    )
+    video_id: Optional[str] = Field(
+        default=None,
+        description="action=transcript or comments: video or Short ID, or its URL.",
+    )
+    language: Optional[str] = Field(
+        default=None,
+        description=(
+            "action=transcript: caption language code such as en or es. Omit for "
+            "the default track. A video without captions returns a not-found error."
+        ),
+    )
+    order: Optional[Literal["top", "newest"]] = Field(
+        default=None, description="action=comments: comment order."
+    )
+    handle: Optional[str] = Field(
+        default=None,
+        description=(
+            "action=channel or channel_videos: channel handle (with or without @) "
+            "or channel ID (UC...)."
+        ),
+    )
+    sort: Optional[Literal["latest", "popular"]] = Field(
+        default=None,
+        description="action=channel_videos: video order. The API default is latest.",
+    )
+    cursor: Optional[str] = Field(
+        default=None,
+        description=f"action=search, comments or channel_videos: {_SOCIAL_CURSOR}",
+    )
+
+    @model_validator(mode="after")
+    def check_action_fields(self) -> "YouTubeToolInput":
+        social_request("youtube", self.action, **_social_fields(self))
+        return self
+
+
+class YouTubeTool(BaseTool):
+    name: str = "youtube_tool"
+    description: str = (
+        "Read public YouTube data. Set action to 'search' (videos, Shorts, "
+        "channels or playlists matching query; filters type, upload_date, "
+        "sort_by, duration), 'video' (one video by id or URL: views, likes, "
+        "chapters, caption languages), 'transcript' (a video's captions by "
+        "video_id, optional language), 'comments' (top-level comments by "
+        "video_id, order top or newest), 'channel' (a channel by handle) or "
+        f"'channel_videos' (a channel's uploads by handle, sort latest or "
+        f"popular). {_SOCIAL_PAGING}"
+    )
+    args_schema: ArgsSchema = YouTubeToolInput
+    return_direct: bool = True
+
+    def _run(
+        self,
+        action: str,
+        query: Optional[str] = None,
+        type: Optional[str] = None,
+        upload_date: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        duration: Optional[str] = None,
+        id: Optional[str] = None,
+        video_id: Optional[str] = None,
+        language: Optional[str] = None,
+        order: Optional[str] = None,
+        handle: Optional[str] = None,
+        sort: Optional[str] = None,
+        cursor: Optional[str] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return _call_social(
+            self.name,
+            "youtube",
+            action,
+            query=query,
+            type=type,
+            upload_date=upload_date,
+            sort_by=sort_by,
+            duration=duration,
+            id=id,
+            video_id=video_id,
+            language=language,
+            order=order,
+            handle=handle,
+            sort=sort,
+            cursor=cursor,
+        )
+
+    async def _arun(
+        self,
+        action: str,
+        query: Optional[str] = None,
+        type: Optional[str] = None,
+        upload_date: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        duration: Optional[str] = None,
+        id: Optional[str] = None,
+        video_id: Optional[str] = None,
+        language: Optional[str] = None,
+        order: Optional[str] = None,
+        handle: Optional[str] = None,
+        sort: Optional[str] = None,
+        cursor: Optional[str] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await _acall_social(
+            self.name,
+            "youtube",
+            action,
+            query=query,
+            type=type,
+            upload_date=upload_date,
+            sort_by=sort_by,
+            duration=duration,
+            id=id,
+            video_id=video_id,
+            language=language,
+            order=order,
+            handle=handle,
+            sort=sort,
+            cursor=cursor,
+        )
+
+
+class RedditToolInput(BaseModel):
+    action: Literal["search", "subreddit", "subreddit_posts", "post", "comments"] = (
+        Field(
+            description=(
+                "search: posts across Reddit matching query. subreddit: a "
+                "subreddit by name. subreddit_posts: a subreddit's posts by name. "
+                "post: one post by id. comments: a post's comment tree by post_id."
+            )
+        )
+    )
+    query: Optional[str] = Field(
+        default=None, description="action=search: keyword or phrase."
+    )
+    name: Optional[str] = Field(
+        default=None,
+        description=(
+            "action=subreddit or subreddit_posts: subreddit name without r/. It "
+            "is case-sensitive (AskReddit, not askreddit)."
+        ),
+    )
+    sort: Optional[str] = Field(
+        default=None,
+        description=(
+            "action=search: relevance, new, top or comment_count. "
+            "action=subreddit_posts: best, hot, new, top or rising."
+        ),
+    )
+    timeframe: Optional[Literal["all", "day", "week", "month", "year"]] = Field(
+        default=None,
+        description=(
+            "action=search or subreddit_posts: time window. On subreddit_posts it "
+            "applies to sort=top; without a sort it means top."
+        ),
+    )
+    id: Optional[str] = Field(
+        default=None,
+        description="action=post: post ID (such as 1q6pxwn, with or without t3_) or URL.",
+    )
+    post_id: Optional[str] = Field(
+        default=None,
+        description="action=comments: post ID (with or without t3_) or URL.",
+    )
+    cursor: Optional[str] = Field(
+        default=None,
+        description=f"action=search, subreddit_posts or comments: {_SOCIAL_CURSOR}",
+    )
+
+    @model_validator(mode="after")
+    def check_action_fields(self) -> "RedditToolInput":
+        social_request("reddit", self.action, **_social_fields(self))
+        return self
+
+
+class RedditTool(BaseTool):
+    name: str = "reddit_tool"
+    description: str = (
+        "Read public Reddit data. Set action to 'search' (posts across all "
+        "subreddits matching query), 'subreddit' (a subreddit by name: rules, "
+        "weekly active users), 'subreddit_posts' (a subreddit's posts by name, "
+        "with sort and timeframe), 'post' (one post by id or URL, without "
+        "comments) or 'comments' (a post's comments by post_id, as a tree with "
+        f"the replies Reddit loaded). {_SOCIAL_PAGING}"
+    )
+    args_schema: ArgsSchema = RedditToolInput
+    return_direct: bool = True
+
+    def _run(
+        self,
+        action: str,
+        query: Optional[str] = None,
+        name: Optional[str] = None,
+        sort: Optional[str] = None,
+        timeframe: Optional[str] = None,
+        id: Optional[str] = None,
+        post_id: Optional[str] = None,
+        cursor: Optional[str] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return _call_social(
+            self.name,
+            "reddit",
+            action,
+            query=query,
+            name=name,
+            sort=sort,
+            timeframe=timeframe,
+            id=id,
+            post_id=post_id,
+            cursor=cursor,
+        )
+
+    async def _arun(
+        self,
+        action: str,
+        query: Optional[str] = None,
+        name: Optional[str] = None,
+        sort: Optional[str] = None,
+        timeframe: Optional[str] = None,
+        id: Optional[str] = None,
+        post_id: Optional[str] = None,
+        cursor: Optional[str] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await _acall_social(
+            self.name,
+            "reddit",
+            action,
+            query=query,
+            name=name,
+            sort=sort,
+            timeframe=timeframe,
+            id=id,
+            post_id=post_id,
+            cursor=cursor,
+        )
+
+
+class ThreadsToolInput(BaseModel):
+    action: Literal["search", "search_users", "profile", "profile_posts", "post"] = (
+        Field(
+            description=(
+                "search: posts matching query. search_users: accounts matching "
+                "query. profile: a user by username. profile_posts: a user's "
+                "latest posts by username. post: one post with its replies by id."
+            )
+        )
+    )
+    query: Optional[str] = Field(
+        default=None,
+        description=(
+            "action=search: keyword or phrase. action=search_users: username or name."
+        ),
+    )
+    start_date: Optional[str] = Field(
+        default=None,
+        description="action=search: only posts on or after this date (YYYY-MM-DD).",
+    )
+    end_date: Optional[str] = Field(
+        default=None,
+        description="action=search: only posts on or before this date (YYYY-MM-DD).",
+    )
+    username: Optional[str] = Field(
+        default=None,
+        description="action=profile or profile_posts: Threads username, without @.",
+    )
+    id: Optional[str] = Field(
+        default=None, description="action=post: post URL or shortcode."
+    )
+
+    @model_validator(mode="after")
+    def check_action_fields(self) -> "ThreadsToolInput":
+        social_request("threads", self.action, **_social_fields(self))
+        return self
+
+
+class ThreadsTool(BaseTool):
+    name: str = "threads_tool"
+    description: str = (
+        "Read public Threads data. Set action to 'search' (posts matching query, "
+        "optional start_date and end_date), 'search_users' (accounts matching "
+        "query), 'profile' (a user by username), 'profile_posts' (a user's latest "
+        "public posts) or 'post' (one post by URL or shortcode, with its replies "
+        "and the author's thread continuation). Each action uses only its own "
+        "fields. List actions return {results, next_cursor}; Threads returns one "
+        "page, so next_cursor is always null."
+    )
+    args_schema: ArgsSchema = ThreadsToolInput
+    return_direct: bool = True
+
+    def _run(
+        self,
+        action: str,
+        query: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        username: Optional[str] = None,
+        id: Optional[str] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return _call_social(
+            self.name,
+            "threads",
+            action,
+            query=query,
+            start_date=start_date,
+            end_date=end_date,
+            username=username,
+            id=id,
+        )
+
+    async def _arun(
+        self,
+        action: str,
+        query: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        username: Optional[str] = None,
+        id: Optional[str] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await _acall_social(
+            self.name,
+            "threads",
+            action,
+            query=query,
+            start_date=start_date,
+            end_date=end_date,
+            username=username,
+            id=id,
+        )
+
+
 # ─── People Search ───────────────────────────────────────────────────────────
 #
 # desearch-py ships People Search in 1.4.0, which is not on PyPI yet, so these

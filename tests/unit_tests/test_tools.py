@@ -21,7 +21,7 @@ from langchain_desearch.tools import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-DESEARCH_REQUIREMENT = "desearch-py>=1.8.0,<2.0.0"
+DESEARCH_REQUIREMENT = "desearch-py>=1.11.0,<2.0.0"
 
 
 class _FakeDesearch:
@@ -119,8 +119,8 @@ def test_public_names_stay_compatible():
 def test_package_metadata_pins_compatible_desearch_py():
     pyproject = (ROOT / "pyproject.toml").read_text()
     setup_py = (ROOT / "setup.py").read_text()
-    assert 'version = "1.2.0"' in pyproject
-    assert 'version="1.2.0"' in setup_py
+    assert 'version = "1.3.0"' in pyproject
+    assert 'version="1.3.0"' in setup_py
     assert DESEARCH_REQUIREMENT in pyproject
     assert DESEARCH_REQUIREMENT in setup_py
     assert "desearch-py>=" in pyproject
@@ -132,12 +132,13 @@ def test_package_metadata_pins_compatible_desearch_py():
     assert 'python_requires=">=3.10"' in setup_py
 
 
-def test_release_notes_say_desearch_py_1_8_must_be_on_pypi_first():
+def test_release_notes_say_desearch_py_1_11_must_be_on_pypi_first():
     changelog = (ROOT / "CHANGELOG.md").read_text()
     readme = (ROOT / "README.md").read_text()
+    assert "## [1.3.0]" in changelog
     assert "## [1.2.0]" in changelog
     for text in (changelog, readme):
-        assert "desearch-py 1.8.0" in text
+        assert "desearch-py 1.11.0" in text
         assert "PyPI" in text
 
 

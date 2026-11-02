@@ -13,6 +13,9 @@ EXPECTED_ALL = [
     "TikTokTool",
     "FacebookTool",
     "InstagramTool",
+    "YouTubeTool",
+    "RedditTool",
+    "ThreadsTool",
     "PeopleSearchTool",
     "PeopleProfilesTool",
 ]

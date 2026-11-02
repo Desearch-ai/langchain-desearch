@@ -5,6 +5,42 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - unreleased
+
+> **Do not publish 1.3.0 before desearch-py 1.11.0 is on PyPI.** This release
+> requires `desearch-py>=1.11.0,<2.0.0`, the first desearch-py with the
+> YouTube, Reddit and Threads methods, and desearch-py 1.11.0 is not on PyPI
+> yet. It is stacked on 1.2.0 (langchain-desearch#5); both ship together.
+
+### Added
+
+- `YouTubeTool` (`youtube_tool`), `RedditTool` (`reddit_tool`) and
+  `ThreadsTool` (`threads_tool`): one tool per platform with an `action`
+  field, covering all 16 YouTube, Reddit and Threads endpoints.
+  - YouTube: `search` (`type`, `upload_date`, `sort_by`, `duration`),
+    `video`, `transcript` (`language`), `comments` (`order`), `channel`,
+    `channel_videos` (`sort`).
+  - Reddit: `search` (`sort`, `timeframe`), `subreddit`, `subreddit_posts`
+    (`sort`, `timeframe`), `post`, `comments` (a tree with loaded replies).
+  - Threads: `search` (`start_date`, `end_date`), `search_users`, `profile`,
+    `profile_posts`, `post` (with its replies and thread continuation).
+- The YouTube and Reddit list actions page like the other social tools:
+  `{"results": [...], "next_cursor": ...}`, with the cursor from the
+  `x-desearch-next-cursor` header. Threads returns one page, so its
+  `next_cursor` is always `None`. These routes take no `count`.
+- Fields with a fixed set of values are checked per action before any
+  request (for example Reddit `sort` differs between `search` and
+  `subreddit_posts`), `start_date`/`end_date` must be `YYYY-MM-DD`, and a
+  leading `r/` is removed from a subreddit `name`.
+- The three tools join `social_tools` and are exported from
+  `langchain_desearch`.
+- `scripts/e2e-youtube-reddit-threads.py`: a live smoke test of the new tools
+  with `--base-url` and `--key-env` (for example against api-dev).
+
+### Changed
+
+- Requires `desearch-py>=1.11.0,<2.0.0` (was `>=1.8.0`).
+
 ## [1.2.0] - unreleased
 
 > **Do not publish 1.2.0 before desearch-py 1.8.0 is on PyPI.** This release

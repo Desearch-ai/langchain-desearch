@@ -1,4 +1,4 @@
-"""TikTok, Facebook and Instagram actions for the social tools.
+"""TikTok, Facebook, Instagram, YouTube, Reddit and Threads actions for the social tools.
 
 Each platform has one LangChain tool with an ``action`` field instead of one
 tool per endpoint, so an agent's tool list stays short. This module maps every
@@ -16,7 +16,14 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
-SOCIAL_PLATFORMS = ("tiktok", "facebook", "instagram")
+SOCIAL_PLATFORMS = (
+    "tiktok",
+    "facebook",
+    "instagram",
+    "youtube",
+    "reddit",
+    "threads",
+)
 
 
 @dataclass(frozen=True)
@@ -28,6 +35,8 @@ class SocialAction:
     optional: Tuple[str, ...] = ()
     # True when the API answers with a JSON array (one page of items).
     returns_list: bool = False
+    # Fields that only take one of a few values: {field: allowed values}.
+    choices: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
 
     @property
     def fields(self) -> Tuple[str, ...]:
@@ -39,6 +48,7 @@ class SocialAction:
 
 
 _PAGE = ("count", "cursor")
+_TIMEFRAMES = ("all", "day", "week", "month", "year")
 
 SOCIAL_ACTIONS: Dict[str, Dict[str, SocialAction]] = {
     "tiktok": {
@@ -74,12 +84,86 @@ SOCIAL_ACTIONS: Dict[str, Dict[str, SocialAction]] = {
         "comments": SocialAction("instagram_comments", ("shortcode",), _PAGE, True),
         "hashtag": SocialAction("instagram_hashtag", ("tag",), _PAGE, True),
     },
+    # YouTube, Reddit and Threads routes take no count: a page is whatever the
+    # platform returns. Threads never pages.
+    "youtube": {
+        "search": SocialAction(
+            "youtube_search",
+            ("query",),
+            ("type", "upload_date", "sort_by", "duration", "cursor"),
+            True,
+            (
+                ("type", ("videos", "shorts", "channels", "playlists")),
+                ("upload_date", ("today", "this_week", "this_month", "this_year")),
+                ("sort_by", ("relevance", "popular")),
+                (
+                    "duration",
+                    ("under_3_min", "between_3_and_20_min", "over_20_min"),
+                ),
+            ),
+        ),
+        "video": SocialAction("youtube_video", ("id",)),
+        "transcript": SocialAction("youtube_transcript", ("video_id",), ("language",)),
+        "comments": SocialAction(
+            "youtube_comments",
+            ("video_id",),
+            ("order", "cursor"),
+            True,
+            (("order", ("top", "newest")),),
+        ),
+        "channel": SocialAction("youtube_channel", ("handle",)),
+        "channel_videos": SocialAction(
+            "youtube_channel_videos",
+            ("handle",),
+            ("sort", "cursor"),
+            True,
+            (("sort", ("latest", "popular")),),
+        ),
+    },
+    "reddit": {
+        "search": SocialAction(
+            "reddit_search",
+            ("query",),
+            ("sort", "timeframe", "cursor"),
+            True,
+            (
+                ("sort", ("relevance", "new", "top", "comment_count")),
+                ("timeframe", _TIMEFRAMES),
+            ),
+        ),
+        "subreddit": SocialAction("reddit_subreddit", ("name",)),
+        "subreddit_posts": SocialAction(
+            "reddit_subreddit_posts",
+            ("name",),
+            ("sort", "timeframe", "cursor"),
+            True,
+            (
+                ("sort", ("best", "hot", "new", "top", "rising")),
+                ("timeframe", _TIMEFRAMES),
+            ),
+        ),
+        "post": SocialAction("reddit_post_by_id", ("id",)),
+        "comments": SocialAction("reddit_comments", ("post_id",), ("cursor",), True),
+    },
+    "threads": {
+        "search": SocialAction(
+            "threads_search", ("query",), ("start_date", "end_date"), True
+        ),
+        "search_users": SocialAction("threads_search_users", ("query",), (), True),
+        "profile": SocialAction("threads_profile", ("username",)),
+        "profile_posts": SocialAction(
+            "threads_profile_posts", ("username",), (), True
+        ),
+        "post": SocialAction("threads_post_by_id", ("id",)),
+    },
 }
 
 _REGION = re.compile(r"^[A-Z]{2}$")
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-# Leading characters people often type that the API does not want.
-_STRIP_PREFIX = {"username": "@", "profile_id": "@", "tag": "#"}
+# Leading characters people often type that the API does not want. A YouTube
+# handle keeps its @: the API takes it with or without.
+_STRIP_PREFIX = {"username": "@", "profile_id": "@", "tag": "#", "name": "r/"}
 
 
 @dataclass(frozen=True)
@@ -161,6 +245,19 @@ def social_request(platform: str, action: str, **fields: Any) -> SocialRequest:
         raise ValueError(
             f"region must be a two-letter code such as US, got {region!r}."
         )
+
+    for name, allowed in spec.choices:
+        value = values.get(name)
+        if value is not None and value not in allowed:
+            raise ValueError(
+                f"{name} for {platform} action '{action}' must be one of "
+                f"{', '.join(allowed)}; got {value!r}."
+            )
+
+    for name in ("start_date", "end_date"):
+        value = values.get(name)
+        if value is not None and not _DATE.match(str(value)):
+            raise ValueError(f"{name} must be a date as YYYY-MM-DD, got {value!r}.")
 
     return SocialRequest(spec.method, values, spec.returns_list)
 

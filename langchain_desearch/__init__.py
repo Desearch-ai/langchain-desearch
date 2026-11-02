@@ -11,6 +11,9 @@ from langchain_desearch.tools import (
     TikTokTool,
     FacebookTool,
     InstagramTool,
+    YouTubeTool,
+    RedditTool,
+    ThreadsTool,
     PeopleSearchTool,
     PeopleProfilesTool,
 )
@@ -28,6 +31,9 @@ __all__ = [
     "TikTokTool",
     "FacebookTool",
     "InstagramTool",
+    "YouTubeTool",
+    "RedditTool",
+    "ThreadsTool",
     "PeopleSearchTool",
     "PeopleProfilesTool",
 ]

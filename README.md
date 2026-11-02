@@ -18,13 +18,13 @@ Install the package using pip:
 pip install langchain-desearch
 ```
 
-> **Release 1.2.0 waits for desearch-py 1.8.0 on PyPI.** langchain-desearch 1.2.0 requires `desearch-py>=1.8.0,<2.0.0`, the first release with the TikTok, Facebook, Instagram and Search API methods. desearch-py 1.8.0 is not on PyPI yet, so do not publish langchain-desearch 1.2.0 until it is. Until then, install desearch-py 1.8.0 from a checkout of the [desearch.py](https://github.com/Desearch-ai/desearch.py) repository (`pip install -e /path/to/desearch.py`) before installing this package from source. desearch-py 1.8.0 needs Python 3.10 or newer, and so does this release.
+> **Release 1.3.0 waits for desearch-py 1.11.0 on PyPI.** langchain-desearch 1.3.0 requires `desearch-py>=1.11.0,<2.0.0`, the first release with the YouTube, Reddit and Threads methods (it also carries the TikTok, Facebook, Instagram and Search API methods of desearch-py 1.8.0). desearch-py 1.11.0 is not on PyPI yet, so do not publish langchain-desearch 1.3.0 until it is. Until then, install desearch-py 1.11.0 from a checkout of the [desearch.py](https://github.com/Desearch-ai/desearch.py) repository (`pip install -e /path/to/desearch.py`) before installing this package from source. desearch-py 1.11.0 needs Python 3.10 or newer, and so does this release.
 
 ## Usage
 
 ### Tools
 
-Every tool is importable from `langchain_desearch.tools`, reads `DESEARCH_API_KEY` from the environment, and works with `invoke` and `ainvoke`. The tools added in 1.2.0 are also exported from `langchain_desearch`.
+Every tool is importable from `langchain_desearch.tools`, reads `DESEARCH_API_KEY` from the environment, and works with `invoke` and `ainvoke`. The tools added in 1.2.0 and 1.3.0 are also exported from `langchain_desearch`.
 
 | Tool class | Tool name | What it returns | desearch-py method | Group |
 | --- | --- | --- | --- | --- |
@@ -47,6 +47,9 @@ Every tool is importable from `langchain_desearch.tools`, reads `DESEARCH_API_KE
 | `TikTokTool` | `tiktok_tool` | TikTok posts, profiles, comments, hashtags, trending | `tiktok_*` (7 actions) | `social_tools` |
 | `FacebookTool` | `facebook_tool` | Facebook posts, profiles, comments; Ad Library search | `facebook_*` (6 actions) | `social_tools` |
 | `InstagramTool` | `instagram_tool` | Instagram posts, profiles, comments, hashtags; profile search | `instagram_*` (6 actions) | `social_tools` |
+| `YouTubeTool` | `youtube_tool` | YouTube search, videos, transcripts, comments, channels and their uploads | `youtube_*` (6 actions) | `social_tools` |
+| `RedditTool` | `reddit_tool` | Reddit search, subreddits and their posts, posts, comment trees | `reddit_*` (5 actions) | `social_tools` |
+| `ThreadsTool` | `threads_tool` | Threads post and account search, profiles, latest posts, a post with replies | `threads_*` (5 actions) | `social_tools` |
 | `PeopleSearchTool` | `people_search_tool` | People matching a description (billed, 1-5 minutes) | HTTP `/desearch/people` | `people_tools` |
 | `PeopleProfilesTool` | `people_profiles_tool` | People earlier searches found (free) | HTTP `/desearch/people` | `people_tools` |
 
@@ -81,7 +84,7 @@ The `twitter_tools` group contains tools specifically for Twitter-related operat
 - `AIXLinksSearchTool`: Find X posts for a prompt with Desearch AI.
 
 #### Social Tools
-The `social_tools` group has one tool per platform: `TikTokTool` (`tiktok_tool`), `FacebookTool` (`facebook_tool`) and `InstagramTool` (`instagram_tool`). Each takes an `action` and the fields that action needs, so an agent gets three tools instead of nineteen.
+The `social_tools` group has one tool per platform: `TikTokTool` (`tiktok_tool`), `FacebookTool` (`facebook_tool`), `InstagramTool` (`instagram_tool`), `YouTubeTool` (`youtube_tool`), `RedditTool` (`reddit_tool`) and `ThreadsTool` (`threads_tool`). Each takes an `action` and the fields that action needs, so an agent gets six tools instead of thirty-five.
 
 | Tool | `action` | Required | Optional | desearch-py method | Pages |
 | --- | --- | --- | --- | --- | --- |
@@ -104,12 +107,30 @@ The `social_tools` group has one tool per platform: `TikTokTool` (`tiktok_tool`)
 | | `profile_posts` | `username` | `count`, `cursor` | `instagram_profile_posts` | yes |
 | | `comments` | `shortcode` (the code in `instagram.com/p/<shortcode>/`) | `count`, `cursor` | `instagram_comments` | yes |
 | | `hashtag` | `tag` | `count`, `cursor` | `instagram_hashtag` | yes |
+| `youtube_tool` | `search` | `query` | `type`, `upload_date`, `sort_by`, `duration`, `cursor` | `youtube_search` | yes |
+| | `video` | `id` (video ID or URL) | | `youtube_video` | |
+| | `transcript` | `video_id` | `language` | `youtube_transcript` | |
+| | `comments` | `video_id` | `order`, `cursor` | `youtube_comments` | yes |
+| | `channel` | `handle` (with or without `@`, or `UC…` ID) | | `youtube_channel` | |
+| | `channel_videos` | `handle` | `sort`, `cursor` | `youtube_channel_videos` | yes |
+| `reddit_tool` | `search` | `query` | `sort`, `timeframe`, `cursor` | `reddit_search` | yes |
+| | `subreddit` | `name` (case-sensitive) | | `reddit_subreddit` | |
+| | `subreddit_posts` | `name` | `sort`, `timeframe`, `cursor` | `reddit_subreddit_posts` | yes |
+| | `post` | `id` (post ID or URL) | | `reddit_post_by_id` | |
+| | `comments` | `post_id` | `cursor` | `reddit_comments` | yes |
+| `threads_tool` | `search` | `query` | `start_date`, `end_date` | `threads_search` | no |
+| | `search_users` | `query` | | `threads_search_users` | no |
+| | `profile` | `username` | | `threads_profile` | |
+| | `profile_posts` | `username` | | `threads_profile_posts` | no |
+| | `post` | `id` (URL or shortcode) | | `threads_post_by_id` | |
 
-- `post` and `profile` return one object. The other actions return `{"results": [...], "next_cursor": ...}`.
-- `count` is a maximum (1-100). The API default is 10 for `search` and 20 elsewhere. A page can hold fewer items without being the last one.
-- To read the next page, call the tool again with the same action and target and `cursor` set to `next_cursor`. `next_cursor` is `None` on the last page, and on `tiktok_tool` `trending` and `instagram_tool` `search`, which do not paginate. A cursor is opaque and is sent back unchanged; it is valid for 24 hours.
+- `post`, `profile`, `video`, `transcript`, `channel` and `subreddit` return one object. The other actions return `{"results": [...], "next_cursor": ...}`.
+- `count` is a maximum (1-100). The API default is 10 for `search` and 20 elsewhere. A page can hold fewer items without being the last one. YouTube, Reddit and Threads take no `count`: a page is whatever the platform returns.
+- To read the next page, call the tool again with the same action and target and `cursor` set to `next_cursor`. `next_cursor` is `None` on the last page, and on `tiktok_tool` `trending`, `instagram_tool` `search` and every `threads_tool` action, which do not paginate. A cursor is opaque and is sent back unchanged; it is valid for 24 hours.
 - A missing target, a field the action does not use, or a `cursor` on an action that does not page raises a validation error that names the fields the action takes, before any request is sent. Empty strings count as unset.
-- A leading `@` is removed from `username` and `profile_id`, and a leading `#` from `tag`.
+- A leading `@` is removed from `username` and `profile_id`, a leading `#` from `tag`, and a leading `r/` from a subreddit `name`. A YouTube `handle` is sent as is.
+- Fields with a fixed set of values (`type`, `upload_date`, `sort_by`, `duration`, `order`, `sort`, `timeframe`) are checked per action before any request, and `start_date`/`end_date` must be `YYYY-MM-DD`.
+- `youtube_tool` `transcript` returns a not-found error (not charged) when the video has no captions. Each YouTube, Reddit and Threads call is billed as one request, including an empty page.
 - `facebook_tool` `search` and `hashtag` read the public Meta Ad Library, not organic posts.
 
 #### People Tools
@@ -229,6 +250,36 @@ comments = instagram.invoke({"action": "comments", "shortcode": shortcode})
 # Facebook search reads the Meta Ad Library.
 ads = FacebookTool().invoke({"action": "search", "query": "running shoes", "count": 10})
 print(len(ads["results"]), ads["next_cursor"])
+```
+
+#### Using the YouTube, Reddit and Threads Tools
+```python
+from langchain_desearch import RedditTool, ThreadsTool, YouTubeTool
+
+youtube = YouTubeTool()
+videos = youtube.invoke({"action": "search", "query": "bittensor", "type": "videos"})
+video_id = videos["results"][0]["id"]
+transcript = youtube.invoke({"action": "transcript", "video_id": video_id, "language": "en"})
+print(transcript["text"][:200])
+
+# Page through a channel's uploads.
+page = youtube.invoke({"action": "channel_videos", "handle": "@MrBeast", "sort": "popular"})
+if page["next_cursor"]:
+    page = youtube.invoke({
+        "action": "channel_videos", "handle": "@MrBeast", "sort": "popular",
+        "cursor": page["next_cursor"],
+    })
+
+reddit = RedditTool()
+top = reddit.invoke({"action": "subreddit_posts", "name": "AskReddit", "sort": "top", "timeframe": "week"})
+post_id = top["results"][0]["id"]
+tree = reddit.invoke({"action": "comments", "post_id": post_id})
+for comment in tree["results"]:
+    print(comment["author"], len(comment["replies"]))
+
+# Threads returns one page; a post comes with its replies.
+post = ThreadsTool().invoke({"action": "post", "id": "https://www.threads.com/@zuck/post/DK-BydcJHkF"})
+print(post["text"], len(post["comments"]))
 ```
 
 To give an agent the social tools, pass `social_tools` from `langchain_desearch.search_tools`.
@@ -391,6 +442,12 @@ pytest tests/integration_tests
 ```bash
 DESEARCH_API_KEY=... python scripts/e2e-full-coverage.py
 DESEARCH_API_KEY=... python scripts/e2e-full-coverage.py --with-people  # also starts one billed People Search (count 5)
+```
+
+`scripts/e2e-youtube-reddit-threads.py` calls every `youtube_tool`, `reddit_tool` and `threads_tool` action once (one through `ainvoke`) and follows one cursor page on each paged action, about 22 requests at $0.00207 each. `--base-url` and `--key-env` point it at another deployment:
+```bash
+DESEARCH_API_KEY=... python scripts/e2e-youtube-reddit-threads.py
+python scripts/e2e-youtube-reddit-threads.py --base-url https://api-dev.desearch.ai --key-env DESEARCH_DEV_API_KEY
 ```
 
 ## Project Structure

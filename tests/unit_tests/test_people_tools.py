@@ -181,7 +181,7 @@ def test_people_search_shares_the_package_desearch_py_requirement():
     # package requirement is the one the other tools need.
     for name in ("pyproject.toml", "setup.py"):
         text = (ROOT / name).read_text()
-        assert "desearch-py>=1.8.0,<2.0.0" in text
+        assert "desearch-py>=1.11.0,<2.0.0" in text
 
 
 def test_people_search_starts_waits_and_returns_compact_people(people_api):
