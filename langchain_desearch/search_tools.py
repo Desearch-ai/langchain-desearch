@@ -23,6 +23,10 @@ from .tools import (
     ThreadsTool,
     PeopleSearchTool,
     PeopleProfilesTool,
+    CompanySearchTool,
+    CompanyEnrichTool,
+    CompanyTasksTool,
+    CompanyTaskControlTool,
 )
 
 # General-purpose search tools: AI search, web and X search, AI link search,
@@ -69,4 +73,21 @@ social_tools = [
 people_tools = [
     PeopleSearchTool(),
     PeopleProfilesTool(),
+]
+
+# Group People Search tools into a separate list. people_search_tool is billed
+# and takes minutes, so it is not part of search_tools.
+people_tools = [
+    PeopleSearchTool(),
+    PeopleProfilesTool(),
+]
+
+# Group Company Search tools into a separate list. company_search_tool and
+# company_enrich_tool are billed and take minutes, so they are not part of
+# search_tools.
+company_tools = [
+    CompanySearchTool(),
+    CompanyEnrichTool(),
+    CompanyTasksTool(),
+    CompanyTaskControlTool(),
 ]

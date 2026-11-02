@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Do not publish 1.3.0 before desearch-py 1.11.0 is on PyPI.** This release
 > requires `desearch-py>=1.11.0,<2.0.0`, the first desearch-py with the
 > YouTube, Reddit and Threads methods, and desearch-py 1.11.0 is not on PyPI
-> yet. It is stacked on 1.2.0 (langchain-desearch#5); both ship together.
+> yet. PyPI's latest langchain-desearch is 1.0.6, so 1.1.0 and 1.2.0 (People
+> Search, Company Search, full API coverage) ship for the first time with 1.3.0.
 
 ### Added
 
@@ -43,13 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.2.0] - unreleased
 
-> **Do not publish 1.2.0 before desearch-py 1.8.0 is on PyPI.** This release
-> requires `desearch-py>=1.8.0,<2.0.0`, the first desearch-py with the TikTok,
-> Facebook, Instagram and Search API methods, and desearch-py 1.8.0 is not on
-> PyPI yet. Until it is, `pip install langchain-desearch==1.2.0` cannot
-> resolve its dependencies.
+> Never published on its own; it ships as part of 1.3.0.
 
 ### Added
+
+- Company Search tools in `company_tools` (#4): `CompanySearchTool`
+  (`company_search_tool`), `CompanyEnrichTool` (`company_enrich_tool`),
+  `CompanyTasksTool` (`company_tasks_tool`) and `CompanyTaskControlTool`
+  (`company_task_control_tool`). They call the `/desearch/companies` routes
+  over HTTP (see `companies.py`).
 
 - `AIWebLinksSearchTool` (`ai_web_links_search_tool`): web links for a prompt,
   picked by Desearch AI, without a summary (`ai_web_links_search`,

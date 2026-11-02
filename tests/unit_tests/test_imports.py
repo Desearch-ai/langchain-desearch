@@ -18,6 +18,10 @@ EXPECTED_ALL = [
     "ThreadsTool",
     "PeopleSearchTool",
     "PeopleProfilesTool",
+    "CompanySearchTool",
+    "CompanyEnrichTool",
+    "CompanyTasksTool",
+    "CompanyTaskControlTool",
 ]
 
 

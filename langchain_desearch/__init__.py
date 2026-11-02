@@ -16,6 +16,10 @@ from langchain_desearch.tools import (
     ThreadsTool,
     PeopleSearchTool,
     PeopleProfilesTool,
+    CompanySearchTool,
+    CompanyEnrichTool,
+    CompanyTasksTool,
+    CompanyTaskControlTool,
 )
 
 __all__ = [
@@ -36,4 +40,8 @@ __all__ = [
     "ThreadsTool",
     "PeopleSearchTool",
     "PeopleProfilesTool",
+    "CompanySearchTool",
+    "CompanyEnrichTool",
+    "CompanyTasksTool",
+    "CompanyTaskControlTool",
 ]
