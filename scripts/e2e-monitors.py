@@ -11,13 +11,17 @@ call fails.
 Everything it calls is free. ``--trigger`` also runs the monitor once and
 waits for the run, which is billed (about $0.002-0.02). The webhook points at
 https://example.com, which does not accept POSTs, so the test event is not
-delivered; the step checks the answer's shape.
+delivered; the step checks the answer's shape. ``--with-accounts`` also creates
+(and deletes) a monitor with the TikTok source and watched accounts on X,
+Reddit, YouTube and TikTok (desearch-public-api#635): the names come back
+cleaned, a bad name is a 422, and an update keeps the accounts it does not
+change. Also free.
 
 ``--base-url`` points the tools at another deployment, such as
 https://api-dev.desearch.ai, and ``--key-env`` names the variable that holds
 its key. Keys are read from the environment or ``~/.config/desearch/e2e.env``.
 
-    python scripts/e2e-monitors.py --base-url https://api-dev.desearch.ai --key-env DESEARCH_DEV_API_KEY
+    python scripts/e2e-monitors.py --base-url https://api-dev.desearch.ai --key-env DESEARCH_DEV_API_KEY [--with-accounts]
 
 The tools call the routes over HTTP, so this needs no unreleased desearch-py.
 Not run by CI.
@@ -29,7 +33,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
 # Run from a checkout without installing the package.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -290,6 +294,106 @@ def check_monitors(smoke: Smoke, base_url: str, trigger: bool) -> None:
         smoke.failed += 1
 
 
+WATCHED = {
+    "x_accounts": ["@OpenAI", "https://x.com/AnthropicAI"],
+    "reddit_subreddits": ["r/LocalLLaMA"],
+    "youtube_channels": ["https://www.youtube.com/@OpenAI"],
+    "tiktok_accounts": ["@openai"],
+    "tiktok_count": 20,
+}
+CLEANED = {
+    "x": ["OpenAI", "AnthropicAI"],
+    "reddit": ["LocalLLaMA"],
+    "youtube": ["@OpenAI"],
+    "tiktok": ["openai"],
+}
+ACCOUNT_FIELDS = {"x": "accounts", "reddit": "subreddits", "youtube": "channels", "tiktok": "accounts"}
+
+
+def _watched(result: Any) -> Dict[str, Any]:
+    options = result.get("options") or {}
+    return {
+        source: (options.get(source) or {}).get(field) for source, field in ACCOUNT_FIELDS.items()
+    }
+
+
+def check_watched_accounts(smoke: Smoke, base_url: str) -> None:
+    create = MonitorCreateTool(base_url=base_url)
+    estimate = MonitorEstimateTool(base_url=base_url)
+    update = MonitorUpdateTool(base_url=base_url)
+    control = MonitorControlTool(base_url=base_url)
+    items = MonitorItemsTool(base_url=base_url)
+    sources = ["x", "reddit", "youtube", "tiktok"]
+
+    def priced_tiktok(result: Any) -> Optional[str]:
+        breakdown = result.get("breakdown") if isinstance(result, dict) else None
+        return None if isinstance(breakdown, dict) and "tiktok" in breakdown else f"breakdown={breakdown!r}"
+
+    smoke.run(
+        "monitor_estimate_tool (tiktok + watched accounts)",
+        lambda: estimate.invoke({"sources": sources, **WATCHED}),
+        priced_tiktok,
+    )
+    bad = estimate.invoke({"sources": ["x"], "x_accounts": ["not a name!"]})
+    if isinstance(bad, str) and "HTTP 422" in bad:
+        print("PASS monitor_estimate_tool (bad X username is 422)", flush=True)
+        smoke.passed += 1
+    else:
+        print(f"FAIL monitor_estimate_tool (bad X username is 422): {_one_line(repr(bad), 200)}", flush=True)
+        smoke.failed += 1
+
+    def cleaned(result: Any) -> Optional[str]:
+        if result.get("sources") != sources:
+            return f"sources={result.get('sources')!r}"
+        if _watched(result) != CLEANED:
+            return f"names={_watched(result)!r}"
+        return None
+
+    created = smoke.run(
+        "monitor_create_tool (tiktok + watched accounts)",
+        lambda: create.invoke(
+            {
+                "query": "OpenAI announcements",
+                "name": f"langchain e2e accounts {int(time.time())}",
+                "sources": sources,
+                "interval": "7d",
+                "min_score": 0,
+                "run_now": False,
+                **WATCHED,
+            }
+        ),
+        cleaned,
+    )
+    if not created:
+        smoke.skip("the remaining watched-accounts steps", "the monitor was not created")
+        return
+    monitor_id = created["monitor_id"]
+    try:
+
+        def kept(result: Any) -> Optional[str]:
+            tiktok = (result.get("options") or {}).get("tiktok")
+            if tiktok != {"count": 30, "accounts": ["openai"]}:
+                return f"tiktok={tiktok!r}"
+            return None if _watched(result) == CLEANED else f"names={_watched(result)!r}"
+
+        smoke.run(
+            "monitor_update_tool (tiktok_count keeps every account)",
+            lambda: update.invoke({"monitor_id": monitor_id, "tiktok_count": 30}),
+            kept,
+        )
+        smoke.run(
+            "monitor_items_tool (source tiktok)",
+            lambda: items.invoke({"monitor_id": monitor_id, "source": "tiktok"}),
+            _has_list("items"),
+        )
+    finally:
+        smoke.run(
+            "monitor_control_tool delete (accounts)",
+            lambda: control.invoke({"monitor_id": monitor_id, "action": "delete"}),
+            _expect(monitor_id=monitor_id, deleted=True),
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
@@ -307,6 +411,11 @@ def main() -> int:
         action="store_true",
         help="also run the monitor once and wait for the run (billed)",
     )
+    parser.add_argument(
+        "--with-accounts",
+        action="store_true",
+        help="also check TikTok and watched accounts (needs desearch-public-api#635)",
+    )
     args = parser.parse_args()
     _load_env_file()
     api_key = os.environ.get(args.key_env, "").strip()
@@ -317,6 +426,8 @@ def main() -> int:
     os.environ["DESEARCH_API_KEY"] = api_key
     smoke = Smoke()
     check_monitors(smoke, args.base_url, args.trigger)
+    if args.with_accounts:
+        check_watched_accounts(smoke, args.base_url)
     print(
         f"{smoke.passed} passed, {smoke.failed} failed, {smoke.skipped} skipped "
         f"on {args.base_url}"
