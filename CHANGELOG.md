@@ -5,6 +5,46 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - unreleased
+
+> **Do not publish 1.5.0 before the Monitors API is on production.** The
+> Monitors routes are live on api-dev.desearch.ai only. The tools call them
+> over HTTP (`monitors.py`), so this release needs no new desearch-py; it keeps
+> `desearch-py>=1.11.0,<2.0.0`, which must be on PyPI first (see 1.3.0). The
+> version assumes #7 (1.4.0) lands first; if this lands first, it can be 1.4.0.
+
+### Added
+
+- Monitors tools in `monitor_tools`: searches that rerun on a schedule over
+  the web, X, Reddit, YouTube and Threads and keep only what is new. They call
+  the `/desearch/monitors` routes over HTTP, with the People Search transport.
+  - `MonitorCreateTool` (`monitor_create_tool`): create a monitor (`query`,
+    `name`, `criteria`, `sources`, `interval`, `min_score`, `summary`,
+    `web_count`, `x_count`, `x_lang`, `x_min_likes`, `webhook_url`,
+    `webhook_events`, `metadata`, `run_now`). Returns `webhook_secret` once.
+  - `MonitorEstimateTool` (`monitor_estimate_tool`): the most one run and one
+    month of runs can cost.
+  - `MonitorsTool` (`monitors_tool`): list monitors (`status`, `limit`,
+    `cursor`) or read one by `monitor_id`.
+  - `MonitorUpdateTool` (`monitor_update_tool`): change settings. Web and X
+    options and webhook events are merged with the current ones, because
+    `PATCH` replaces each object whole; `remove_webhook` removes the webhook.
+  - `MonitorControlTool` (`monitor_control_tool`): `pause`, `resume`,
+    `trigger` (one billed run), `delete`, `test_webhook`,
+    `rotate_webhook_secret`.
+  - `MonitorRunsTool` (`monitor_runs_tool`): list runs, or read one run with
+    its items; `timeout` waits for it to end.
+  - `MonitorItemsTool` (`monitor_items_tool`): everything a monitor kept,
+    newest first, by `source`, paged with `next_cursor`.
+- Values the API would reject (query length, more than 5 criteria, unknown
+  sources, intervals or events, `web_count` other than 10/15/20, a non-HTTPS
+  webhook URL, more than 20 metadata labels) are refused before any request.
+- Every result has a `next_step`: where to read what a monitor keeps, how to
+  resume a paused one (`paused_reason`), how to wait on a run, and that
+  `webhook_secret` is shown only once.
+- `scripts/e2e-monitors.py`: a live smoke test of every free Monitors action
+  with `--base-url` and `--key-env`; `--trigger` adds one billed run.
+
 ## [1.3.0] - unreleased
 
 > **Do not publish 1.3.0 before desearch-py 1.11.0 is on PyPI.** This release

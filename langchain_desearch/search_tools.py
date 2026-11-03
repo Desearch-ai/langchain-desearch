@@ -27,6 +27,13 @@ from .tools import (
     CompanyEnrichTool,
     CompanyTasksTool,
     CompanyTaskControlTool,
+    MonitorCreateTool,
+    MonitorEstimateTool,
+    MonitorsTool,
+    MonitorUpdateTool,
+    MonitorControlTool,
+    MonitorRunsTool,
+    MonitorItemsTool,
 )
 
 # General-purpose search tools: AI search, web and X search, AI link search,
@@ -90,4 +97,18 @@ company_tools = [
     CompanyEnrichTool(),
     CompanyTasksTool(),
     CompanyTaskControlTool(),
+]
+
+# Group Monitors tools into a separate list. A monitor runs on a schedule and
+# each run is billed (monitor_create_tool queues the first one at once, and
+# monitor_control_tool action='trigger' runs one now), so they are not part of
+# search_tools.
+monitor_tools = [
+    MonitorCreateTool(),
+    MonitorEstimateTool(),
+    MonitorsTool(),
+    MonitorUpdateTool(),
+    MonitorControlTool(),
+    MonitorRunsTool(),
+    MonitorItemsTool(),
 ]

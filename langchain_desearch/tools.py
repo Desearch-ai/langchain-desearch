@@ -23,6 +23,29 @@ from langchain_desearch.companies import (
     list_company_tasks,
     run_company_task,
 )
+from langchain_desearch.monitors import (
+    MONITOR_API_BASE_URL,
+    MONITOR_CONTROL_TOOL,
+    MONITOR_CREATE_TOOL,
+    MONITOR_ESTIMATE_TOOL,
+    MONITOR_ITEMS_TOOL,
+    MONITOR_RUNS_TOOL,
+    MONITOR_UPDATE_TOOL,
+    MONITORS_TOOL,
+    MonitorClient,
+    control_monitor,
+    create_monitor,
+    estimate_monitor,
+    get_monitors,
+    monitor_create_body,
+    monitor_estimate_body,
+    monitor_options,
+    monitor_settings,
+    monitor_webhook,
+    read_items,
+    read_runs,
+    update_monitor,
+)
 from langchain_desearch.people import (
     PEOPLE_API_BASE_URL,
     PeopleClient,
@@ -2951,4 +2974,721 @@ class CompanyTaskControlTool(BaseTool):
             tool_name=_COMPANY_SEARCH_TOOL,
             control_tool_name=self.name,
             enrich_tool_name=_COMPANY_ENRICH_TOOL,
+        )
+
+
+# Monitors. desearch-py ships them in 1.13.0, which is not on PyPI yet, so these
+# tools call the /desearch/monitors routes over HTTP (see monitors.py).
+
+_MonitorSource = Literal["web", "x", "reddit", "youtube", "threads"]
+_MonitorInterval = Literal["1h", "3h", "6h", "12h", "1d", "7d"]
+_MonitorEvent = Literal["monitor.items.found", "monitor.run.completed", "monitor.run.failed"]
+
+_MONITOR_BILLING = (
+    "Creating, reading, changing and deleting monitors is free. Each run is billed: its "
+    "searches at their list price, $0.05 per 1,000 items screened, and the summary's LLM "
+    "usage plus 50% (when summary is on). A run holds max_run_cost_usd on the balance and "
+    "bills only what it used; a run with no new items still pays for its searches."
+)
+_MONITOR_ID_DESCRIPTION = "monitor_id returned when the monitor was created."
+_MONITOR_QUERY_DESCRIPTION = (
+    "What to watch, in plain words, for example 'Bittensor subnet launches and updates' "
+    "(3-500 characters). Every source is searched with it."
+)
+_MONITOR_CRITERIA_DESCRIPTION = (
+    "Up to 5 conditions an item must meet to be kept, each up to 300 characters, for "
+    "example ['Announces a new subnet, release or partnership']. Each is one yes/no "
+    "screening question."
+)
+_MONITOR_SOURCES_DESCRIPTION = "Where to look: web, x, reddit, youtube, threads (default web and x)."
+_MONITOR_INTERVAL_DESCRIPTION = "How often it runs: 1h, 3h, 6h, 12h, 1d or 7d (default 1d)."
+_MONITOR_MIN_SCORE_DESCRIPTION = (
+    "Relevance (0-100) an item needs to be kept (default 60). The score is the lowest of "
+    "'is it about the query' and the criteria."
+)
+_MONITOR_SUMMARY_DESCRIPTION = (
+    "Write a short digest of the items each run keeps (its LLM usage is billed plus 50%)."
+)
+_MONITOR_WEB_COUNT_DESCRIPTION = "Web pages read per run: 10, 15 or 20 (default 10)."
+_MONITOR_X_COUNT_DESCRIPTION = "Newest X posts read per run, 1-100 (default 20)."
+_MONITOR_X_LANG_DESCRIPTION = "Only X posts in this language, for example 'en'."
+_MONITOR_X_MIN_LIKES_DESCRIPTION = "Only X posts with at least this many likes."
+_MONITOR_WEBHOOK_URL_DESCRIPTION = (
+    "HTTPS URL on a public address that receives new items as signed POSTs. Redirects "
+    "are not followed."
+)
+_MONITOR_WEBHOOK_EVENTS_DESCRIPTION = (
+    "Webhook events: monitor.items.found (a run kept at least one item), "
+    "monitor.run.completed (every completed run), monitor.run.failed. Default "
+    "monitor.items.found and monitor.run.failed."
+)
+_MONITOR_METADATA_DESCRIPTION = (
+    "Your own labels, for example {'team': 'growth'}: up to 20 keys of 1-64 characters "
+    "with string values up to 500 characters. Echoed in webhooks; they do not change "
+    "what is found."
+)
+
+
+async def _invoke_monitors(
+    api_key: str, base_url: str, operation: Callable[..., Awaitable[Any]], **kwargs: Any
+) -> Any:
+    async with MonitorClient(api_key, base_url) as client:
+        return await operation(client, **kwargs)
+
+
+def _call_monitors(
+    api_key: str, base_url: str, operation: Callable[..., Awaitable[Any]], **kwargs: Any
+) -> Any:
+    try:
+        return _run_coroutine(
+            lambda: _invoke_monitors(api_key, base_url, operation, **kwargs)
+        )
+    except Exception as exc:
+        return _people_error(exc)
+
+
+async def _acall_monitors(
+    api_key: str, base_url: str, operation: Callable[..., Awaitable[Any]], **kwargs: Any
+) -> Any:
+    try:
+        return await _invoke_monitors(api_key, base_url, operation, **kwargs)
+    except Exception as exc:
+        return _people_error(exc)
+
+
+class _MonitorTool(BaseTool):
+    """Shared settings of the Monitors tools."""
+
+    return_direct: bool = True
+    base_url: str = MONITOR_API_BASE_URL
+
+    def _call(self, operation: Callable[..., Awaitable[Any]], **kwargs: Any) -> Any:
+        return _call_monitors(_require_api_key(), self.base_url, operation, **kwargs)
+
+    async def _acall(self, operation: Callable[..., Awaitable[Any]], **kwargs: Any) -> Any:
+        return await _acall_monitors(_require_api_key(), self.base_url, operation, **kwargs)
+
+
+class _MonitorOptionsInput(BaseModel):
+    web_count: Optional[Literal[10, 15, 20]] = Field(
+        default=None, description=_MONITOR_WEB_COUNT_DESCRIPTION
+    )
+    x_count: Optional[int] = Field(
+        default=None, ge=1, le=100, description=_MONITOR_X_COUNT_DESCRIPTION
+    )
+    x_lang: Optional[str] = Field(
+        default=None, min_length=2, max_length=3, description=_MONITOR_X_LANG_DESCRIPTION
+    )
+    x_min_likes: Optional[int] = Field(
+        default=None, ge=0, description=_MONITOR_X_MIN_LIKES_DESCRIPTION
+    )
+
+
+class MonitorCreateToolInput(_MonitorOptionsInput):
+    query: str = Field(min_length=3, max_length=500, description=_MONITOR_QUERY_DESCRIPTION)
+    name: Optional[str] = Field(
+        default=None, max_length=120, description="A label for the console and webhooks."
+    )
+    criteria: Optional[List[str]] = Field(
+        default=None, max_length=5, description=_MONITOR_CRITERIA_DESCRIPTION
+    )
+    sources: Optional[List[_MonitorSource]] = Field(
+        default=None, min_length=1, description=_MONITOR_SOURCES_DESCRIPTION
+    )
+    interval: Optional[_MonitorInterval] = Field(
+        default=None, description=_MONITOR_INTERVAL_DESCRIPTION
+    )
+    min_score: Optional[int] = Field(
+        default=None, ge=0, le=100, description=_MONITOR_MIN_SCORE_DESCRIPTION
+    )
+    summary: Optional[bool] = Field(default=None, description=_MONITOR_SUMMARY_DESCRIPTION)
+    webhook_url: Optional[str] = Field(
+        default=None, max_length=2000, description=_MONITOR_WEBHOOK_URL_DESCRIPTION
+    )
+    webhook_events: Optional[List[_MonitorEvent]] = Field(
+        default=None, min_length=1, description=_MONITOR_WEBHOOK_EVENTS_DESCRIPTION
+    )
+    metadata: Optional[Dict[str, str]] = Field(
+        default=None, description=_MONITOR_METADATA_DESCRIPTION
+    )
+    run_now: bool = Field(
+        default=True,
+        description=(
+            "Queue the first run at once (default true; that run is billed). False waits "
+            "for the first scheduled run."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def check_body(self) -> "MonitorCreateToolInput":
+        # Refuse values the API would reject before anything is created.
+        monitor_create_body(**self.model_dump())
+        return self
+
+
+class MonitorCreateTool(_MonitorTool):
+    name: str = MONITOR_CREATE_TOOL
+    description: str = (
+        "Creates a Desearch monitor: a search that reruns on a schedule (every 1h to 7d) "
+        "over the web, X, Reddit, YouTube and Threads and keeps only what is new. Each run "
+        "searches the time since the previous run, drops everything the monitor has seen "
+        "before, screens the rest for relevance to `query` and each of `criteria`, and keeps "
+        "items scoring at least `min_score`. Kept items go to `webhook_url` (signed) and "
+        f"stay readable with {MONITOR_ITEMS_TOOL}. {_MONITOR_BILLING} With run_now (the "
+        "default) the first run is queued at once. Returns the monitor with "
+        "max_run_cost_usd and, when a webhook is set, webhook_secret (shown only once). "
+        f"Check the cost first with {MONITOR_ESTIMATE_TOOL}. At most 25 monitors per account."
+    )
+    args_schema: ArgsSchema = MonitorCreateToolInput
+
+    def _run(
+        self,
+        query: str,
+        name: Optional[str] = None,
+        criteria: Optional[List[str]] = None,
+        sources: Optional[List[str]] = None,
+        interval: Optional[str] = None,
+        min_score: Optional[int] = None,
+        summary: Optional[bool] = None,
+        web_count: Optional[int] = None,
+        x_count: Optional[int] = None,
+        x_lang: Optional[str] = None,
+        x_min_likes: Optional[int] = None,
+        webhook_url: Optional[str] = None,
+        webhook_events: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        run_now: bool = True,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        body = monitor_create_body(
+            query,
+            name=name,
+            criteria=criteria,
+            sources=sources,
+            interval=interval,
+            min_score=min_score,
+            summary=summary,
+            web_count=web_count,
+            x_count=x_count,
+            x_lang=x_lang,
+            x_min_likes=x_min_likes,
+            webhook_url=webhook_url,
+            webhook_events=webhook_events,
+            metadata=metadata,
+            run_now=run_now,
+        )
+        return self._call(create_monitor, body=body)
+
+    async def _arun(
+        self,
+        query: str,
+        name: Optional[str] = None,
+        criteria: Optional[List[str]] = None,
+        sources: Optional[List[str]] = None,
+        interval: Optional[str] = None,
+        min_score: Optional[int] = None,
+        summary: Optional[bool] = None,
+        web_count: Optional[int] = None,
+        x_count: Optional[int] = None,
+        x_lang: Optional[str] = None,
+        x_min_likes: Optional[int] = None,
+        webhook_url: Optional[str] = None,
+        webhook_events: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        run_now: bool = True,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        body = monitor_create_body(
+            query,
+            name=name,
+            criteria=criteria,
+            sources=sources,
+            interval=interval,
+            min_score=min_score,
+            summary=summary,
+            web_count=web_count,
+            x_count=x_count,
+            x_lang=x_lang,
+            x_min_likes=x_min_likes,
+            webhook_url=webhook_url,
+            webhook_events=webhook_events,
+            metadata=metadata,
+            run_now=run_now,
+        )
+        return await self._acall(create_monitor, body=body)
+
+
+class MonitorEstimateToolInput(_MonitorOptionsInput):
+    sources: Optional[List[_MonitorSource]] = Field(
+        default=None, min_length=1, description=_MONITOR_SOURCES_DESCRIPTION
+    )
+    interval: Optional[_MonitorInterval] = Field(
+        default=None, description=_MONITOR_INTERVAL_DESCRIPTION
+    )
+    summary: Optional[bool] = Field(default=None, description=_MONITOR_SUMMARY_DESCRIPTION)
+
+
+class MonitorEstimateTool(_MonitorTool):
+    name: str = MONITOR_ESTIMATE_TOOL
+    description: str = (
+        "Estimates what a Desearch monitor with these sources, options, summary and "
+        "interval can cost: max_run_cost_usd (the most one run can cost, held on the "
+        "balance while it runs), runs_per_month, max_monthly_cost_usd and a breakdown per "
+        "part of a run. Runs usually cost less, since a run bills only what it used. Free "
+        "and instant: it creates nothing."
+    )
+    args_schema: ArgsSchema = MonitorEstimateToolInput
+
+    def _run(
+        self,
+        sources: Optional[List[str]] = None,
+        interval: Optional[str] = None,
+        summary: Optional[bool] = None,
+        web_count: Optional[int] = None,
+        x_count: Optional[int] = None,
+        x_lang: Optional[str] = None,
+        x_min_likes: Optional[int] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        body = monitor_estimate_body(
+            sources, interval, summary, web_count, x_count, x_lang, x_min_likes
+        )
+        return self._call(estimate_monitor, body=body)
+
+    async def _arun(
+        self,
+        sources: Optional[List[str]] = None,
+        interval: Optional[str] = None,
+        summary: Optional[bool] = None,
+        web_count: Optional[int] = None,
+        x_count: Optional[int] = None,
+        x_lang: Optional[str] = None,
+        x_min_likes: Optional[int] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        body = monitor_estimate_body(
+            sources, interval, summary, web_count, x_count, x_lang, x_min_likes
+        )
+        return await self._acall(estimate_monitor, body=body)
+
+
+class MonitorsToolInput(BaseModel):
+    monitor_id: Optional[str] = Field(
+        default=None,
+        description="Read this one monitor instead of listing them.",
+    )
+    status: Optional[List[Literal["active", "paused"]]] = Field(
+        default=None, description="Only monitors in these statuses: active, paused."
+    )
+    limit: int = Field(default=20, ge=1, le=100, description="Monitors per page (1-100).")
+    cursor: Optional[str] = Field(
+        default=None,
+        description="next_cursor from the previous page. Keep the same status when you page.",
+    )
+
+
+class MonitorsTool(_MonitorTool):
+    name: str = MONITORS_TOOL
+    description: str = (
+        "Lists your Desearch monitors, newest first, or reads one by monitor_id: query, "
+        "criteria, sources, interval, status (active or paused, with paused_reason), "
+        "webhook, max_run_cost_usd, next_run_at, the last run and totals (runs, items, "
+        "spent_usd). Pages with next_cursor. Free and instant: it never starts a run."
+    )
+    args_schema: ArgsSchema = MonitorsToolInput
+
+    def _run(
+        self,
+        monitor_id: Optional[str] = None,
+        status: Optional[List[str]] = None,
+        limit: int = 20,
+        cursor: Optional[str] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return self._call(
+            get_monitors, monitor_id=monitor_id, status=status, limit=limit, cursor=cursor
+        )
+
+    async def _arun(
+        self,
+        monitor_id: Optional[str] = None,
+        status: Optional[List[str]] = None,
+        limit: int = 20,
+        cursor: Optional[str] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await self._acall(
+            get_monitors, monitor_id=monitor_id, status=status, limit=limit, cursor=cursor
+        )
+
+
+class MonitorUpdateToolInput(_MonitorOptionsInput):
+    monitor_id: str = Field(min_length=1, description=_MONITOR_ID_DESCRIPTION)
+    query: Optional[str] = Field(
+        default=None, min_length=3, max_length=500, description=_MONITOR_QUERY_DESCRIPTION
+    )
+    name: Optional[str] = Field(
+        default=None, max_length=120, description="A label for the console and webhooks."
+    )
+    criteria: Optional[List[str]] = Field(
+        default=None,
+        max_length=5,
+        description=f"{_MONITOR_CRITERIA_DESCRIPTION} Replaces the current criteria; [] removes them.",
+    )
+    sources: Optional[List[_MonitorSource]] = Field(
+        default=None, min_length=1, description=_MONITOR_SOURCES_DESCRIPTION
+    )
+    interval: Optional[_MonitorInterval] = Field(
+        default=None, description=_MONITOR_INTERVAL_DESCRIPTION
+    )
+    min_score: Optional[int] = Field(
+        default=None, ge=0, le=100, description=_MONITOR_MIN_SCORE_DESCRIPTION
+    )
+    summary: Optional[bool] = Field(default=None, description=_MONITOR_SUMMARY_DESCRIPTION)
+    webhook_url: Optional[str] = Field(
+        default=None,
+        max_length=2000,
+        description=(
+            f"{_MONITOR_WEBHOOK_URL_DESCRIPTION} A new URL gets a new webhook_secret, "
+            "returned once."
+        ),
+    )
+    webhook_events: Optional[List[_MonitorEvent]] = Field(
+        default=None, min_length=1, description=_MONITOR_WEBHOOK_EVENTS_DESCRIPTION
+    )
+    remove_webhook: bool = Field(
+        default=False, description="Remove the monitor's webhook."
+    )
+    metadata: Optional[Dict[str, str]] = Field(
+        default=None,
+        description=f"{_MONITOR_METADATA_DESCRIPTION} Replaces the current labels.",
+    )
+
+    @model_validator(mode="after")
+    def check_changes(self) -> "MonitorUpdateToolInput":
+        if self.remove_webhook and (self.webhook_url or self.webhook_events):
+            raise ValueError("Set remove_webhook or webhook_url/webhook_events, not both.")
+        changes = self.model_dump(exclude={"monitor_id", "remove_webhook"}, exclude_none=True)
+        if not changes and not self.remove_webhook:
+            raise ValueError("Nothing to change: set at least one setting.")
+        # Refuse values the API would reject before anything is sent.
+        _monitor_update_kwargs(**self.model_dump())
+        return self
+
+
+def _monitor_update_kwargs(
+    monitor_id: str,
+    query: Optional[str] = None,
+    name: Optional[str] = None,
+    criteria: Optional[List[str]] = None,
+    sources: Optional[List[str]] = None,
+    interval: Optional[str] = None,
+    min_score: Optional[int] = None,
+    summary: Optional[bool] = None,
+    web_count: Optional[int] = None,
+    x_count: Optional[int] = None,
+    x_lang: Optional[str] = None,
+    x_min_likes: Optional[int] = None,
+    webhook_url: Optional[str] = None,
+    webhook_events: Optional[List[str]] = None,
+    remove_webhook: bool = False,
+    metadata: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    if webhook_url:
+        monitor_webhook(webhook_url, webhook_events)
+    return {
+        "monitor_id": monitor_id,
+        "settings": monitor_settings(
+            query, name, criteria, sources, interval, min_score, summary, metadata
+        ),
+        "options": monitor_options(web_count, x_count, x_lang, x_min_likes),
+        "webhook_url": webhook_url,
+        "webhook_events": webhook_events,
+        "remove_webhook": remove_webhook,
+    }
+
+
+class MonitorUpdateTool(_MonitorTool):
+    name: str = MONITOR_UPDATE_TOOL
+    description: str = (
+        "Changes a Desearch monitor's settings: query, name, criteria, sources, interval, "
+        "min_score, summary, the web and X options, the webhook (a new URL gets a new "
+        "webhook_secret, returned once; remove_webhook removes it) and metadata. Only the "
+        "settings you set change; web and X options and webhook events are merged with "
+        "the current ones. Free. To pause, resume, run now or delete a monitor, use "
+        f"{MONITOR_CONTROL_TOOL}."
+    )
+    args_schema: ArgsSchema = MonitorUpdateToolInput
+
+    def _run(
+        self,
+        monitor_id: str,
+        query: Optional[str] = None,
+        name: Optional[str] = None,
+        criteria: Optional[List[str]] = None,
+        sources: Optional[List[str]] = None,
+        interval: Optional[str] = None,
+        min_score: Optional[int] = None,
+        summary: Optional[bool] = None,
+        web_count: Optional[int] = None,
+        x_count: Optional[int] = None,
+        x_lang: Optional[str] = None,
+        x_min_likes: Optional[int] = None,
+        webhook_url: Optional[str] = None,
+        webhook_events: Optional[List[str]] = None,
+        remove_webhook: bool = False,
+        metadata: Optional[Dict[str, str]] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        kwargs = _monitor_update_kwargs(
+            monitor_id,
+            query=query,
+            name=name,
+            criteria=criteria,
+            sources=sources,
+            interval=interval,
+            min_score=min_score,
+            summary=summary,
+            web_count=web_count,
+            x_count=x_count,
+            x_lang=x_lang,
+            x_min_likes=x_min_likes,
+            webhook_url=webhook_url,
+            webhook_events=webhook_events,
+            remove_webhook=remove_webhook,
+            metadata=metadata,
+        )
+        return self._call(update_monitor, **kwargs)
+
+    async def _arun(
+        self,
+        monitor_id: str,
+        query: Optional[str] = None,
+        name: Optional[str] = None,
+        criteria: Optional[List[str]] = None,
+        sources: Optional[List[str]] = None,
+        interval: Optional[str] = None,
+        min_score: Optional[int] = None,
+        summary: Optional[bool] = None,
+        web_count: Optional[int] = None,
+        x_count: Optional[int] = None,
+        x_lang: Optional[str] = None,
+        x_min_likes: Optional[int] = None,
+        webhook_url: Optional[str] = None,
+        webhook_events: Optional[List[str]] = None,
+        remove_webhook: bool = False,
+        metadata: Optional[Dict[str, str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        kwargs = _monitor_update_kwargs(
+            monitor_id,
+            query=query,
+            name=name,
+            criteria=criteria,
+            sources=sources,
+            interval=interval,
+            min_score=min_score,
+            summary=summary,
+            web_count=web_count,
+            x_count=x_count,
+            x_lang=x_lang,
+            x_min_likes=x_min_likes,
+            webhook_url=webhook_url,
+            webhook_events=webhook_events,
+            remove_webhook=remove_webhook,
+            metadata=metadata,
+        )
+        return await self._acall(update_monitor, **kwargs)
+
+
+class MonitorControlToolInput(BaseModel):
+    monitor_id: str = Field(min_length=1, description=_MONITOR_ID_DESCRIPTION)
+    action: Literal[
+        "pause", "resume", "trigger", "delete", "test_webhook", "rotate_webhook_secret"
+    ] = Field(
+        description=(
+            "'pause' (no scheduled runs until resumed), 'resume' (also after a pause for "
+            "credits or a failing webhook), 'trigger' (queue one billed run now), 'delete' "
+            "(cannot be undone), 'test_webhook' (send a signed test event and report what "
+            "the endpoint answered) or 'rotate_webhook_secret' (a new signing secret, "
+            "returned once)."
+        )
+    )
+
+
+class MonitorControlTool(_MonitorTool):
+    name: str = MONITOR_CONTROL_TOOL
+    description: str = (
+        "Pauses, resumes, triggers or deletes a Desearch monitor, or tests or rotates its "
+        "webhook. Pause, resume, delete, test_webhook and rotate_webhook_secret are free. "
+        "trigger queues one run now and is BILLED like a scheduled run (up to the "
+        "monitor's max_run_cost_usd); it fails with HTTP 409 while a run is queued or "
+        f"running. Wait for a triggered run with {MONITOR_RUNS_TOOL} and its run_id. Delete "
+        "cannot be undone."
+    )
+    args_schema: ArgsSchema = MonitorControlToolInput
+
+    def _run(
+        self,
+        monitor_id: str,
+        action: str,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return self._call(control_monitor, monitor_id=monitor_id, action=action)
+
+    async def _arun(
+        self,
+        monitor_id: str,
+        action: str,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await self._acall(control_monitor, monitor_id=monitor_id, action=action)
+
+
+class MonitorRunsToolInput(BaseModel):
+    monitor_id: str = Field(min_length=1, description=_MONITOR_ID_DESCRIPTION)
+    run_id: Optional[str] = Field(
+        default=None,
+        description="Read this one run with the items it kept instead of listing runs.",
+    )
+    timeout: int = Field(
+        default=0,
+        ge=0,
+        le=600,
+        description=(
+            "With run_id: seconds to wait for a queued or running run to end (default 0, "
+            "no wait). Waiting is free."
+        ),
+    )
+    limit: int = Field(default=20, ge=1, le=100, description="Runs per page (1-100).")
+    cursor: Optional[str] = Field(
+        default=None, description="next_cursor from the previous page of runs."
+    )
+
+
+class MonitorRunsTool(_MonitorTool):
+    name: str = MONITOR_RUNS_TOOL
+    description: str = (
+        "Lists a Desearch monitor's runs, newest first, or reads one run by run_id with "
+        "the items it kept (most relevant first). Each run has its status (queued, running, "
+        "completed, failed, cancelled) and fail_reason, the time window it searched, per "
+        "source how many items were fetched, new and kept, item_count, the summary (when "
+        "on), and reserved_usd and cost_usd. With run_id and timeout it waits for the run "
+        "to end. Free: it never starts a run."
+    )
+    args_schema: ArgsSchema = MonitorRunsToolInput
+    poll_interval: float = 5.0
+
+    def _run(
+        self,
+        monitor_id: str,
+        run_id: Optional[str] = None,
+        timeout: int = 0,
+        limit: int = 20,
+        cursor: Optional[str] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return self._call(
+            read_runs,
+            monitor_id=monitor_id,
+            run_id=run_id,
+            limit=limit,
+            cursor=cursor,
+            timeout=timeout,
+            poll_interval=self.poll_interval,
+        )
+
+    async def _arun(
+        self,
+        monitor_id: str,
+        run_id: Optional[str] = None,
+        timeout: int = 0,
+        limit: int = 20,
+        cursor: Optional[str] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await self._acall(
+            read_runs,
+            monitor_id=monitor_id,
+            run_id=run_id,
+            limit=limit,
+            cursor=cursor,
+            timeout=timeout,
+            poll_interval=self.poll_interval,
+        )
+
+
+class MonitorItemsToolInput(BaseModel):
+    monitor_id: str = Field(min_length=1, description=_MONITOR_ID_DESCRIPTION)
+    source: Optional[_MonitorSource] = Field(
+        default=None, description="Only items from this source: web, x, reddit, youtube, threads."
+    )
+    limit: int = Field(default=50, ge=1, le=200, description="Items per page (1-200).")
+    cursor: Optional[str] = Field(
+        default=None,
+        description="next_cursor from the previous page. Keep the same source when you page.",
+    )
+
+
+class MonitorItemsTool(_MonitorTool):
+    name: str = MONITOR_ITEMS_TOOL
+    description: str = (
+        "Reads everything a Desearch monitor has kept, newest first: per item its source, "
+        "url, title, text (cut to 500 characters), author, published_at, score (0-100) "
+        "with the screening signals, and source data (X likes, reposts, replies, views; "
+        "Reddit subreddit, score, comments; YouTube channel, views; web domain, "
+        "highlights). Filter by source; page with next_cursor. Free: it never starts a run."
+    )
+    args_schema: ArgsSchema = MonitorItemsToolInput
+
+    def _run(
+        self,
+        monitor_id: str,
+        source: Optional[str] = None,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool synchronously."""
+        del run_manager
+        return self._call(
+            read_items, monitor_id=monitor_id, source=source, limit=limit, cursor=cursor
+        )
+
+    async def _arun(
+        self,
+        monitor_id: str,
+        source: Optional[str] = None,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> Any:
+        """Use the tool asynchronously."""
+        del run_manager
+        return await self._acall(
+            read_items, monitor_id=monitor_id, source=source, limit=limit, cursor=cursor
         )

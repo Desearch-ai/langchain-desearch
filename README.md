@@ -10,6 +10,7 @@ This project integrates the Desearch API with LangChain tools to enable various 
   - **Social Tools**: Public TikTok, Facebook, Instagram, YouTube, Reddit and Threads data, one tool per platform, with cursor paging.
   - **People Tools**: Find people on X, LinkedIn, YouTube and TikTok who match a plain-language description, and browse everyone your searches found.
   - **Company Tools**: Find companies that match a plain-language description, or enrich the domains you have, with public emails, phones, social profiles and leaders.
+  - **Monitor Tools**: Searches that rerun on a schedule over the web, X, Reddit, YouTube and Threads and keep only what is new, with an optional signed webhook.
 
 ## Installation
 
@@ -25,7 +26,7 @@ pip install langchain-desearch
 
 ### Tools
 
-Every tool is importable from `langchain_desearch.tools`, reads `DESEARCH_API_KEY` from the environment, and works with `invoke` and `ainvoke`. The tools added in 1.2.0 and 1.3.0 are also exported from `langchain_desearch`.
+Every tool is importable from `langchain_desearch.tools`, reads `DESEARCH_API_KEY` from the environment, and works with `invoke` and `ainvoke`. The tools added in 1.2.0, 1.3.0 and 1.5.0 are also exported from `langchain_desearch`.
 
 | Tool class | Tool name | What it returns | desearch-py method | Group |
 | --- | --- | --- | --- | --- |
@@ -156,6 +157,18 @@ The `company_tools` group contains the [Company Search](https://www.desearch.ai/
 - `CompanyTaskControlTool` (`company_task_control_tool`): Pause, resume or cancel a company task (`action`). Free.
 
 > **Billing and timing**: `company_search_tool` and `company_enrich_tool` are billed. Company Search reserves `count` companies (5-200) and Company Enrich one company per domain, at the route's per-company price ([prices](https://desearch.ai/pricing)); you pay only for the companies a task delivers (at least 2 for Company Search and 1 for Company Enrich when it delivers any), and a task that delivers none is free. A task runs in the background for minutes. The tools wait up to `timeout` seconds (default 300), then return the companies delivered so far with the `task_id`. Call either tool again with only `task_id` to keep waiting: that is free and does not start a new task. `company_tools` is kept out of `search_tools`, so `create_search_agent` never starts a billed task.
+
+#### Monitor Tools
+The `monitor_tools` group contains the Monitors tools. A monitor reruns `query` on a schedule (`interval`: `1h`, `3h`, `6h`, `12h`, `1d` or `7d`) over its `sources` (`web`, `x`, `reddit`, `youtube`, `threads`; default `web` and `x`). Each run searches the time since the previous run, drops everything the monitor has seen before, screens the rest for relevance to `query` and to each of `criteria` (up to 5), and keeps the items whose `score` (0-100, the lowest of those answers) reaches `min_score` (default 60).
+- `MonitorCreateTool` (`monitor_create_tool`): Create a monitor. Takes `query`, `name`, `criteria`, `sources`, `interval`, `min_score`, `summary` (a short digest per run), the web and X options (`web_count` 10/15/20, `x_count` 1-100, `x_lang`, `x_min_likes`), `webhook_url` and `webhook_events`, `metadata` (up to 20 labels) and `run_now` (default true: the first run is queued at once). With a webhook it returns `webhook_secret`, only this once.
+- `MonitorEstimateTool` (`monitor_estimate_tool`): The most one run (`max_run_cost_usd`) and one month of runs can cost for these sources, options, summary and interval. Free.
+- `MonitorsTool` (`monitors_tool`): List your monitors (filter by `status`, page with `cursor`), or read one by `monitor_id`. Free.
+- `MonitorUpdateTool` (`monitor_update_tool`): Change any setting. Only the settings you set change; the web and X options and the webhook events are merged with the current ones. A new `webhook_url` gets a new `webhook_secret`; `remove_webhook` removes the webhook. Free.
+- `MonitorControlTool` (`monitor_control_tool`): `action` `pause`, `resume`, `trigger` (one billed run now; HTTP 409 while a run is queued or running), `delete`, `test_webhook` (a signed test event; reports what your endpoint answered) or `rotate_webhook_secret`. All but `trigger` are free.
+- `MonitorRunsTool` (`monitor_runs_tool`): List a monitor's runs, or read one by `run_id` with the items it kept. With `run_id`, `timeout` waits for the run to end. Free.
+- `MonitorItemsTool` (`monitor_items_tool`): Everything a monitor kept, newest first, filtered by `source` and paged with `cursor`. Each item has its url, title, text (cut to 500 characters), author, `published_at`, `score`, the screening `signals` and source `data` (X likes and views, Reddit subreddit and comments, YouTube channel and views, web domain and highlights). Free.
+
+> **Billing**: creating, reading, changing, pausing and deleting monitors is free. Each run is billed: its searches at their list price, $0.05 per 1,000 items screened, and the summary's LLM usage plus 50% (when `summary` is on). A run holds `max_run_cost_usd` on the balance and bills only what it used; a run with no new items still pays for its searches. A run the balance cannot hold fails and pauses the monitor (`paused_reason` `insufficient_credits`) until you resume it. `monitor_tools` is kept out of `search_tools`, so `create_search_agent` never creates a monitor.
 
 ### Examples
 
@@ -393,6 +406,52 @@ To give an agent the Company tools, pass `company_tools` from `langchain_desearc
 
 > Company Search calls the `/desearch/companies` routes over HTTP with aiohttp, because the Company Search methods in `desearch-py` arrive in 1.8.0, which is not on PyPI yet. The tools will switch to the SDK once it is published.
 
+#### Using Monitors
+```python
+from langchain_desearch.tools import (
+    MonitorControlTool,
+    MonitorCreateTool,
+    MonitorEstimateTool,
+    MonitorItemsTool,
+    MonitorRunsTool,
+)
+from dotenv import load_dotenv
+load_dotenv()
+
+# What can it cost? (free)
+estimate = MonitorEstimateTool().invoke({"sources": ["web", "x", "reddit"], "interval": "1d"})
+print(estimate["max_run_cost_usd"], estimate["max_monthly_cost_usd"])
+
+# Create it (free); the first run is queued at once and billed.
+monitor = MonitorCreateTool().invoke({
+    "query": "Bittensor subnet launches and updates",
+    "criteria": ["Announces a new subnet, release or partnership"],
+    "sources": ["web", "x", "reddit"],
+    "interval": "1d",
+    "webhook_url": "https://example.com/hooks/desearch",
+    "metadata": {"team": "growth"},
+})
+secret = monitor["webhook_secret"]  # returned only once: store it
+
+# Everything it kept so far, newest first (free).
+items = MonitorItemsTool().invoke({"monitor_id": monitor["monitor_id"], "source": "x"})
+for item in items["items"]:
+    print(item["score"], item.get("url"), item.get("text"))
+
+# Run it again now (billed) and wait up to 2 minutes for the run.
+run = MonitorControlTool().invoke({"monitor_id": monitor["monitor_id"], "action": "trigger"})
+run = MonitorRunsTool().invoke(
+    {"monitor_id": monitor["monitor_id"], "run_id": run["run_id"], "timeout": 120}
+)
+print(run["status"], run.get("item_count"), run.get("cost_usd"))
+```
+
+Each webhook delivery is a POST with `Desearch-Event`, `Desearch-Delivery` and `Desearch-Signature: t=<unix>,v1=<hex>` headers. `v1` is the HMAC-SHA256 of `"<t>.<raw body>"` keyed with `webhook_secret`; reject a `t` older than 5 minutes and compare in constant time (desearch-py 1.13.0 adds a helper for it). A delivery that does not get a 2xx within 10 seconds is retried after 1, 5, 30, 120 and 360 minutes, and after 5 deliveries in a row fail the monitor pauses with `paused_reason` `webhook_failing`.
+
+To give an agent the Monitor tools, pass `monitor_tools` from `langchain_desearch.search_tools` to your agent.
+
+> Monitors call the `/desearch/monitors` routes over HTTP with aiohttp, because the Monitors methods in `desearch-py` arrive in 1.13.0, which is not on PyPI yet. The tools will switch to the SDK once it is published.
+
 #### Using RAG (Retrieval-Augmented Generation)
 ```python
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
@@ -510,6 +569,11 @@ DESEARCH_API_KEY=... python scripts/e2e-youtube-reddit-threads.py
 python scripts/e2e-youtube-reddit-threads.py --base-url https://api-dev.desearch.ai --key-env DESEARCH_DEV_API_KEY
 ```
 
+`scripts/e2e-monitors.py` creates one monitor without a first run, calls every free Monitors action once (read, list, estimate, update, pause, resume, runs, items, webhook test, secret rotation, webhook removal) and deletes the monitor at the end. Everything it calls is free; `--trigger` also runs the monitor once and waits for the run (billed, about $0.002-0.02):
+```bash
+python scripts/e2e-monitors.py --base-url https://api-dev.desearch.ai --key-env DESEARCH_DEV_API_KEY
+```
+
 ## Project Structure
 
 ```
@@ -520,6 +584,7 @@ langchain_desearch/
 │   ├── people.py
 │   ├── social.py
 │   ├── companies.py
+│   ├── monitors.py
 │   ├── search_tools.py
 │   ├── agent.py
 ├── examples/

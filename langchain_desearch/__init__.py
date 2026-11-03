@@ -20,6 +20,13 @@ from langchain_desearch.tools import (
     CompanyEnrichTool,
     CompanyTasksTool,
     CompanyTaskControlTool,
+    MonitorCreateTool,
+    MonitorEstimateTool,
+    MonitorsTool,
+    MonitorUpdateTool,
+    MonitorControlTool,
+    MonitorRunsTool,
+    MonitorItemsTool,
 )
 
 __all__ = [
@@ -44,4 +51,11 @@ __all__ = [
     "CompanyEnrichTool",
     "CompanyTasksTool",
     "CompanyTaskControlTool",
+    "MonitorCreateTool",
+    "MonitorEstimateTool",
+    "MonitorsTool",
+    "MonitorUpdateTool",
+    "MonitorControlTool",
+    "MonitorRunsTool",
+    "MonitorItemsTool",
 ]
