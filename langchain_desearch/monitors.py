@@ -1,9 +1,10 @@
 """Monitors on the Desearch API (``/desearch/monitors/*``).
 
-A monitor reruns a search over the web, X, Reddit, YouTube and Threads on a
-schedule (every 1h, 3h, 6h, 12h, 1d or 7d) and keeps only what is new. Each run
-searches the window since the previous run ended, drops every item the monitor
-has already seen, screens the rest with Jev (``relevant``, ``new_info`` and one
+A monitor reruns a search over the web, X, Reddit, YouTube, Threads and TikTok
+on a schedule (every 1h, 3h, 6h, 12h, 1d or 7d) and keeps only what is new. Each
+run searches the window since the previous run ended (or, for a source that
+watches accounts, reads each account's newest posts), drops every item the
+monitor has already seen, screens the rest with Jev (``relevant``, ``new_info`` and one
 yes/no question per criterion; ``score`` is the lowest of ``relevant`` and the
 criteria, 0-100) and keeps the items at ``min_score`` or above. Kept items go to
 an optional signed webhook and stay readable here, newest first.
@@ -20,6 +21,12 @@ tools to the SDK methods once desearch-py 1.13.0 is published.
   per 1,000 items screened, and the summary's LLM usage plus 50%. A run holds
   the monitor's ``max_run_cost_usd`` on the balance and bills only what it used;
   a run with no new items still pays for its searches.
+- A watched account is one feed call per run at that feed's list price: an X
+  timeline (20 posts) is about $0.003, a subreddit or YouTube channel $0.00207,
+  a TikTok profile ``tiktok_count`` posts at $0.00207 per post.
+- TikTok search has no working date filter and ranks by relevance, so a TikTok
+  keyword monitor finds a new video only when it reaches TikTok's top results;
+  to follow creators, watch their accounts (``tiktok_accounts``).
 """
 
 import asyncio
@@ -46,7 +53,7 @@ MONITOR_CONTROL_TOOL = "monitor_control_tool"
 MONITOR_RUNS_TOOL = "monitor_runs_tool"
 MONITOR_ITEMS_TOOL = "monitor_items_tool"
 
-MONITOR_SOURCES = ("web", "x", "reddit", "youtube", "threads")
+MONITOR_SOURCES = ("web", "x", "reddit", "youtube", "threads", "tiktok")
 MONITOR_INTERVALS = ("1h", "3h", "6h", "12h", "1d", "7d")
 MONITOR_EVENTS = ("monitor.items.found", "monitor.run.completed", "monitor.run.failed")
 MONITOR_STATUSES = ("active", "paused")
@@ -63,6 +70,11 @@ MONITOR_CONTROL_ACTIONS = (
 MONITOR_RUN_ENDED_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 MONITOR_WEB_COUNTS = (10, 15, 20)
+MONITOR_TIKTOK_COUNTS = (10, 20, 30)
+# Watched accounts per source. The API cleans the names (``@OpenAI`` or an x.com URL
+# becomes ``OpenAI``, ``r/LocalLLaMA`` becomes ``LocalLLaMA``) and answers 422 for a
+# name it cannot read, so they are sent as given.
+MONITOR_ACCOUNTS_MAX = 10
 MONITOR_QUERY_MAX = 500
 MONITOR_NAME_MAX = 120
 MONITOR_CRITERIA_MAX = 5
@@ -229,13 +241,30 @@ def monitor_settings(
     )
 
 
+def _check_accounts(name: str, accounts: Optional[List[str]]) -> None:
+    if accounts is None:
+        return
+    if len(accounts) > MONITOR_ACCOUNTS_MAX:
+        raise ValueError(f"{name} can list at most {MONITOR_ACCOUNTS_MAX} accounts.")
+    if any(not isinstance(account, str) or not account.strip() for account in accounts):
+        raise ValueError(f"{name} must list non-empty names.")
+
+
 def monitor_options(
     web_count: Optional[int] = None,
     x_count: Optional[int] = None,
     x_lang: Optional[str] = None,
     x_min_likes: Optional[int] = None,
+    x_accounts: Optional[List[str]] = None,
+    reddit_subreddits: Optional[List[str]] = None,
+    youtube_channels: Optional[List[str]] = None,
+    tiktok_count: Optional[int] = None,
+    tiktok_accounts: Optional[List[str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    """The per-source ``options`` object, with only the sources that have a value set."""
+    """The per-source ``options`` object, with only the sources that have a value set.
+
+    An empty account list is kept: on update it stops watching accounts.
+    """
     if web_count is not None and web_count not in MONITOR_WEB_COUNTS:
         raise ValueError(
             f"web_count must be one of: {', '.join(map(str, MONITOR_WEB_COUNTS))}."
@@ -246,9 +275,24 @@ def monitor_options(
         raise ValueError("x_lang must be a 2-3 letter language code, for example 'en'.")
     if x_min_likes is not None and x_min_likes < 0:
         raise ValueError("x_min_likes must be 0 or more.")
-    web = _drop_none({"count": web_count})
-    x = _drop_none({"count": x_count, "lang": x_lang, "min_likes": x_min_likes})
-    return {source: values for source, values in (("web", web), ("x", x)) if values}
+    if tiktok_count is not None and tiktok_count not in MONITOR_TIKTOK_COUNTS:
+        raise ValueError(
+            f"tiktok_count must be one of: {', '.join(map(str, MONITOR_TIKTOK_COUNTS))}."
+        )
+    _check_accounts("x_accounts", x_accounts)
+    _check_accounts("reddit_subreddits", reddit_subreddits)
+    _check_accounts("youtube_channels", youtube_channels)
+    _check_accounts("tiktok_accounts", tiktok_accounts)
+    options = {
+        "web": _drop_none({"count": web_count}),
+        "x": _drop_none(
+            {"count": x_count, "lang": x_lang, "min_likes": x_min_likes, "accounts": x_accounts}
+        ),
+        "reddit": _drop_none({"subreddits": reddit_subreddits}),
+        "youtube": _drop_none({"channels": youtube_channels}),
+        "tiktok": _drop_none({"count": tiktok_count, "accounts": tiktok_accounts}),
+    }
+    return {source: values for source, values in options.items() if values}
 
 
 def monitor_webhook(url: str, events: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -280,6 +324,11 @@ def monitor_create_body(
     x_count: Optional[int] = None,
     x_lang: Optional[str] = None,
     x_min_likes: Optional[int] = None,
+    x_accounts: Optional[List[str]] = None,
+    reddit_subreddits: Optional[List[str]] = None,
+    youtube_channels: Optional[List[str]] = None,
+    tiktok_count: Optional[int] = None,
+    tiktok_accounts: Optional[List[str]] = None,
     webhook_url: Optional[str] = None,
     webhook_events: Optional[List[str]] = None,
     metadata: Optional[Dict[str, str]] = None,
@@ -293,7 +342,17 @@ def monitor_create_body(
     body = monitor_settings(
         query, name, criteria, sources, interval, min_score, summary, metadata
     )
-    options = monitor_options(web_count, x_count, x_lang, x_min_likes)
+    options = monitor_options(
+        web_count,
+        x_count,
+        x_lang,
+        x_min_likes,
+        x_accounts,
+        reddit_subreddits,
+        youtube_channels,
+        tiktok_count,
+        tiktok_accounts,
+    )
     if options:
         body["options"] = options
     if webhook_url:
@@ -311,10 +370,25 @@ def monitor_estimate_body(
     x_count: Optional[int] = None,
     x_lang: Optional[str] = None,
     x_min_likes: Optional[int] = None,
+    x_accounts: Optional[List[str]] = None,
+    reddit_subreddits: Optional[List[str]] = None,
+    youtube_channels: Optional[List[str]] = None,
+    tiktok_count: Optional[int] = None,
+    tiktok_accounts: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Body of ``POST /desearch/monitors/estimate``."""
+    """Body of ``POST /desearch/monitors/estimate``. Watched accounts change the price."""
     body = monitor_settings(sources=sources, interval=interval, summary=summary)
-    options = monitor_options(web_count, x_count, x_lang, x_min_likes)
+    options = monitor_options(
+        web_count,
+        x_count,
+        x_lang,
+        x_min_likes,
+        x_accounts,
+        reddit_subreddits,
+        youtube_channels,
+        tiktok_count,
+        tiktok_accounts,
+    )
     if options:
         body["options"] = options
     return body
@@ -553,7 +627,11 @@ async def get_monitors(
 def _merged_options(
     current: Dict[str, Any], changes: Dict[str, Dict[str, Any]]
 ) -> Dict[str, Any]:
-    """The monitor's options with ``changes`` applied: PATCH replaces the whole object."""
+    """The monitor's options with ``changes`` applied: PATCH replaces the whole object.
+
+    Each changed field replaces the current one, so a new account list replaces the
+    watched accounts of that source; every other field and source is kept.
+    """
     merged: Dict[str, Any] = {}
     for source, values in _obj(current).items():
         if isinstance(values, dict):

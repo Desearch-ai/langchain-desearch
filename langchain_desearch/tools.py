@@ -2980,7 +2980,7 @@ class CompanyTaskControlTool(BaseTool):
 # Monitors. desearch-py ships them in 1.13.0, which is not on PyPI yet, so these
 # tools call the /desearch/monitors routes over HTTP (see monitors.py).
 
-_MonitorSource = Literal["web", "x", "reddit", "youtube", "threads"]
+_MonitorSource = Literal["web", "x", "reddit", "youtube", "threads", "tiktok"]
 _MonitorInterval = Literal["1h", "3h", "6h", "12h", "1d", "7d"]
 _MonitorEvent = Literal["monitor.items.found", "monitor.run.completed", "monitor.run.failed"]
 
@@ -2988,7 +2988,10 @@ _MONITOR_BILLING = (
     "Creating, reading, changing and deleting monitors is free. Each run is billed: its "
     "searches at their list price, $0.05 per 1,000 items screened, and the summary's LLM "
     "usage plus 50% (when summary is on). A run holds max_run_cost_usd on the balance and "
-    "bills only what it used; a run with no new items still pays for its searches."
+    "bills only what it used; a run with no new items still pays for its searches. A "
+    "watched account is one feed read per run: an X account about $0.003 (a 20-post "
+    "timeline), a subreddit or YouTube channel $0.00207, TikTok $0.00207 per post (search "
+    "or account)."
 )
 _MONITOR_ID_DESCRIPTION = "monitor_id returned when the monitor was created."
 _MONITOR_QUERY_DESCRIPTION = (
@@ -3000,7 +3003,10 @@ _MONITOR_CRITERIA_DESCRIPTION = (
     "example ['Announces a new subnet, release or partnership']. Each is one yes/no "
     "screening question."
 )
-_MONITOR_SOURCES_DESCRIPTION = "Where to look: web, x, reddit, youtube, threads (default web and x)."
+_MONITOR_SOURCES_DESCRIPTION = (
+    "Where to look: web, x, reddit, youtube, threads, tiktok (default web and x). A source "
+    "with watched accounts reads them instead of searching."
+)
 _MONITOR_INTERVAL_DESCRIPTION = "How often it runs: 1h, 3h, 6h, 12h, 1d or 7d (default 1d)."
 _MONITOR_MIN_SCORE_DESCRIPTION = (
     "Relevance (0-100) an item needs to be kept (default 60). The score is the lowest of "
@@ -3013,6 +3019,35 @@ _MONITOR_WEB_COUNT_DESCRIPTION = "Web pages read per run: 10, 15 or 20 (default 
 _MONITOR_X_COUNT_DESCRIPTION = "Newest X posts read per run, 1-100 (default 20)."
 _MONITOR_X_LANG_DESCRIPTION = "Only X posts in this language, for example 'en'."
 _MONITOR_X_MIN_LIKES_DESCRIPTION = "Only X posts with at least this many likes."
+_MONITOR_ACCOUNTS_NOTE = (
+    "Up to 10. With accounts the source reads their newest posts each run instead of "
+    "searching by keyword; query and criteria still decide what is kept (min_score 0 "
+    "keeps every new post). The API returns the names cleaned."
+)
+_MONITOR_X_ACCOUNTS_DESCRIPTION = (
+    "X accounts to watch: 'OpenAI', '@OpenAI' or an x.com profile URL. x_count is not "
+    "used with accounts (a timeline is 20 posts); x_lang and x_min_likes still filter. "
+    f"{_MONITOR_ACCOUNTS_NOTE}"
+)
+_MONITOR_REDDIT_SUBREDDITS_DESCRIPTION = (
+    f"Subreddits to watch: 'LocalLLaMA', 'r/LocalLLaMA' or a URL. {_MONITOR_ACCOUNTS_NOTE}"
+)
+_MONITOR_YOUTUBE_CHANNELS_DESCRIPTION = (
+    "YouTube channels to watch: '@handle', a 'UC...' channel ID or a channel URL. "
+    f"{_MONITOR_ACCOUNTS_NOTE}"
+)
+_MONITOR_TIKTOK_COUNT_DESCRIPTION = (
+    "TikTok posts read per run, per account with tiktok_accounts: 10, 20 or 30 (default 10)."
+)
+_MONITOR_TIKTOK_SEARCH_NOTE = (
+    "TikTok search has no working date filter and ranks by relevance, so a TikTok keyword "
+    "monitor finds a new video only when it reaches TikTok's top results; to follow "
+    "creators, watch their accounts (tiktok_accounts)."
+)
+_MONITOR_TIKTOK_ACCOUNTS_DESCRIPTION = (
+    f"TikTok accounts to watch: 'openai', '@openai' or a profile URL. {_MONITOR_ACCOUNTS_NOTE} "
+    f"{_MONITOR_TIKTOK_SEARCH_NOTE}"
+)
 _MONITOR_WEBHOOK_URL_DESCRIPTION = (
     "HTTPS URL on a public address that receives new items as signed POSTs. Redirects "
     "are not followed."
@@ -3082,6 +3117,21 @@ class _MonitorOptionsInput(BaseModel):
     x_min_likes: Optional[int] = Field(
         default=None, ge=0, description=_MONITOR_X_MIN_LIKES_DESCRIPTION
     )
+    x_accounts: Optional[List[str]] = Field(
+        default=None, max_length=10, description=_MONITOR_X_ACCOUNTS_DESCRIPTION
+    )
+    reddit_subreddits: Optional[List[str]] = Field(
+        default=None, max_length=10, description=_MONITOR_REDDIT_SUBREDDITS_DESCRIPTION
+    )
+    youtube_channels: Optional[List[str]] = Field(
+        default=None, max_length=10, description=_MONITOR_YOUTUBE_CHANNELS_DESCRIPTION
+    )
+    tiktok_count: Optional[Literal[10, 20, 30]] = Field(
+        default=None, description=_MONITOR_TIKTOK_COUNT_DESCRIPTION
+    )
+    tiktok_accounts: Optional[List[str]] = Field(
+        default=None, max_length=10, description=_MONITOR_TIKTOK_ACCOUNTS_DESCRIPTION
+    )
 
 
 class MonitorCreateToolInput(_MonitorOptionsInput):
@@ -3130,10 +3180,13 @@ class MonitorCreateTool(_MonitorTool):
     name: str = MONITOR_CREATE_TOOL
     description: str = (
         "Creates a Desearch monitor: a search that reruns on a schedule (every 1h to 7d) "
-        "over the web, X, Reddit, YouTube and Threads and keeps only what is new. Each run "
-        "searches the time since the previous run, drops everything the monitor has seen "
-        "before, screens the rest for relevance to `query` and each of `criteria`, and keeps "
-        "items scoring at least `min_score`. Kept items go to `webhook_url` (signed) and "
+        "over the web, X, Reddit, YouTube, Threads and TikTok and keeps only what is new. "
+        "Each run searches the time since the previous run (or reads the newest posts of "
+        "watched accounts: x_accounts, reddit_subreddits, youtube_channels, "
+        "tiktok_accounts), drops everything the monitor has seen before, screens the rest "
+        "for relevance to `query` and each of `criteria`, and keeps items scoring at least "
+        f"`min_score` (0 keeps every new post). {_MONITOR_TIKTOK_SEARCH_NOTE} Kept items go "
+        "to `webhook_url` (signed) and "
         f"stay readable with {MONITOR_ITEMS_TOOL}. {_MONITOR_BILLING} With run_now (the "
         "default) the first run is queued at once. Returns the monitor with "
         "max_run_cost_usd and, when a webhook is set, webhook_secret (shown only once). "
@@ -3154,6 +3207,11 @@ class MonitorCreateTool(_MonitorTool):
         x_count: Optional[int] = None,
         x_lang: Optional[str] = None,
         x_min_likes: Optional[int] = None,
+        x_accounts: Optional[List[str]] = None,
+        reddit_subreddits: Optional[List[str]] = None,
+        youtube_channels: Optional[List[str]] = None,
+        tiktok_count: Optional[int] = None,
+        tiktok_accounts: Optional[List[str]] = None,
         webhook_url: Optional[str] = None,
         webhook_events: Optional[List[str]] = None,
         metadata: Optional[Dict[str, str]] = None,
@@ -3174,6 +3232,11 @@ class MonitorCreateTool(_MonitorTool):
             x_count=x_count,
             x_lang=x_lang,
             x_min_likes=x_min_likes,
+            x_accounts=x_accounts,
+            reddit_subreddits=reddit_subreddits,
+            youtube_channels=youtube_channels,
+            tiktok_count=tiktok_count,
+            tiktok_accounts=tiktok_accounts,
             webhook_url=webhook_url,
             webhook_events=webhook_events,
             metadata=metadata,
@@ -3194,6 +3257,11 @@ class MonitorCreateTool(_MonitorTool):
         x_count: Optional[int] = None,
         x_lang: Optional[str] = None,
         x_min_likes: Optional[int] = None,
+        x_accounts: Optional[List[str]] = None,
+        reddit_subreddits: Optional[List[str]] = None,
+        youtube_channels: Optional[List[str]] = None,
+        tiktok_count: Optional[int] = None,
+        tiktok_accounts: Optional[List[str]] = None,
         webhook_url: Optional[str] = None,
         webhook_events: Optional[List[str]] = None,
         metadata: Optional[Dict[str, str]] = None,
@@ -3214,6 +3282,11 @@ class MonitorCreateTool(_MonitorTool):
             x_count=x_count,
             x_lang=x_lang,
             x_min_likes=x_min_likes,
+            x_accounts=x_accounts,
+            reddit_subreddits=reddit_subreddits,
+            youtube_channels=youtube_channels,
+            tiktok_count=tiktok_count,
+            tiktok_accounts=tiktok_accounts,
             webhook_url=webhook_url,
             webhook_events=webhook_events,
             metadata=metadata,
@@ -3235,8 +3308,8 @@ class MonitorEstimateToolInput(_MonitorOptionsInput):
 class MonitorEstimateTool(_MonitorTool):
     name: str = MONITOR_ESTIMATE_TOOL
     description: str = (
-        "Estimates what a Desearch monitor with these sources, options, summary and "
-        "interval can cost: max_run_cost_usd (the most one run can cost, held on the "
+        "Estimates what a Desearch monitor with these sources, options (watched accounts "
+        "included), summary and interval can cost: max_run_cost_usd (the most one run can cost, held on the "
         "balance while it runs), runs_per_month, max_monthly_cost_usd and a breakdown per "
         "part of a run. Runs usually cost less, since a run bills only what it used. Free "
         "and instant: it creates nothing."
@@ -3252,12 +3325,28 @@ class MonitorEstimateTool(_MonitorTool):
         x_count: Optional[int] = None,
         x_lang: Optional[str] = None,
         x_min_likes: Optional[int] = None,
+        x_accounts: Optional[List[str]] = None,
+        reddit_subreddits: Optional[List[str]] = None,
+        youtube_channels: Optional[List[str]] = None,
+        tiktok_count: Optional[int] = None,
+        tiktok_accounts: Optional[List[str]] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Any:
         """Use the tool synchronously."""
         del run_manager
         body = monitor_estimate_body(
-            sources, interval, summary, web_count, x_count, x_lang, x_min_likes
+            sources,
+            interval,
+            summary,
+            web_count,
+            x_count,
+            x_lang,
+            x_min_likes,
+            x_accounts,
+            reddit_subreddits,
+            youtube_channels,
+            tiktok_count,
+            tiktok_accounts,
         )
         return self._call(estimate_monitor, body=body)
 
@@ -3270,12 +3359,28 @@ class MonitorEstimateTool(_MonitorTool):
         x_count: Optional[int] = None,
         x_lang: Optional[str] = None,
         x_min_likes: Optional[int] = None,
+        x_accounts: Optional[List[str]] = None,
+        reddit_subreddits: Optional[List[str]] = None,
+        youtube_channels: Optional[List[str]] = None,
+        tiktok_count: Optional[int] = None,
+        tiktok_accounts: Optional[List[str]] = None,
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> Any:
         """Use the tool asynchronously."""
         del run_manager
         body = monitor_estimate_body(
-            sources, interval, summary, web_count, x_count, x_lang, x_min_likes
+            sources,
+            interval,
+            summary,
+            web_count,
+            x_count,
+            x_lang,
+            x_min_likes,
+            x_accounts,
+            reddit_subreddits,
+            youtube_channels,
+            tiktok_count,
+            tiktok_accounts,
         )
         return await self._acall(estimate_monitor, body=body)
 
@@ -3401,6 +3506,11 @@ def _monitor_update_kwargs(
     x_count: Optional[int] = None,
     x_lang: Optional[str] = None,
     x_min_likes: Optional[int] = None,
+    x_accounts: Optional[List[str]] = None,
+    reddit_subreddits: Optional[List[str]] = None,
+    youtube_channels: Optional[List[str]] = None,
+    tiktok_count: Optional[int] = None,
+    tiktok_accounts: Optional[List[str]] = None,
     webhook_url: Optional[str] = None,
     webhook_events: Optional[List[str]] = None,
     remove_webhook: bool = False,
@@ -3413,7 +3523,17 @@ def _monitor_update_kwargs(
         "settings": monitor_settings(
             query, name, criteria, sources, interval, min_score, summary, metadata
         ),
-        "options": monitor_options(web_count, x_count, x_lang, x_min_likes),
+        "options": monitor_options(
+            web_count,
+            x_count,
+            x_lang,
+            x_min_likes,
+            x_accounts,
+            reddit_subreddits,
+            youtube_channels,
+            tiktok_count,
+            tiktok_accounts,
+        ),
         "webhook_url": webhook_url,
         "webhook_events": webhook_events,
         "remove_webhook": remove_webhook,
@@ -3426,8 +3546,9 @@ class MonitorUpdateTool(_MonitorTool):
         "Changes a Desearch monitor's settings: query, name, criteria, sources, interval, "
         "min_score, summary, the web and X options, the webhook (a new URL gets a new "
         "webhook_secret, returned once; remove_webhook removes it) and metadata. Only the "
-        "settings you set change; web and X options and webhook events are merged with "
-        "the current ones. Free. To pause, resume, run now or delete a monitor, use "
+        "settings you set change; the per-source options and webhook events are merged with "
+        "the current ones, and a new account list replaces that source's watched accounts "
+        "([] stops watching). Free. To pause, resume, run now or delete a monitor, use "
         f"{MONITOR_CONTROL_TOOL}."
     )
     args_schema: ArgsSchema = MonitorUpdateToolInput
@@ -3446,6 +3567,11 @@ class MonitorUpdateTool(_MonitorTool):
         x_count: Optional[int] = None,
         x_lang: Optional[str] = None,
         x_min_likes: Optional[int] = None,
+        x_accounts: Optional[List[str]] = None,
+        reddit_subreddits: Optional[List[str]] = None,
+        youtube_channels: Optional[List[str]] = None,
+        tiktok_count: Optional[int] = None,
+        tiktok_accounts: Optional[List[str]] = None,
         webhook_url: Optional[str] = None,
         webhook_events: Optional[List[str]] = None,
         remove_webhook: bool = False,
@@ -3467,6 +3593,11 @@ class MonitorUpdateTool(_MonitorTool):
             x_count=x_count,
             x_lang=x_lang,
             x_min_likes=x_min_likes,
+            x_accounts=x_accounts,
+            reddit_subreddits=reddit_subreddits,
+            youtube_channels=youtube_channels,
+            tiktok_count=tiktok_count,
+            tiktok_accounts=tiktok_accounts,
             webhook_url=webhook_url,
             webhook_events=webhook_events,
             remove_webhook=remove_webhook,
@@ -3488,6 +3619,11 @@ class MonitorUpdateTool(_MonitorTool):
         x_count: Optional[int] = None,
         x_lang: Optional[str] = None,
         x_min_likes: Optional[int] = None,
+        x_accounts: Optional[List[str]] = None,
+        reddit_subreddits: Optional[List[str]] = None,
+        youtube_channels: Optional[List[str]] = None,
+        tiktok_count: Optional[int] = None,
+        tiktok_accounts: Optional[List[str]] = None,
         webhook_url: Optional[str] = None,
         webhook_events: Optional[List[str]] = None,
         remove_webhook: bool = False,
@@ -3509,6 +3645,11 @@ class MonitorUpdateTool(_MonitorTool):
             x_count=x_count,
             x_lang=x_lang,
             x_min_likes=x_min_likes,
+            x_accounts=x_accounts,
+            reddit_subreddits=reddit_subreddits,
+            youtube_channels=youtube_channels,
+            tiktok_count=tiktok_count,
+            tiktok_accounts=tiktok_accounts,
             webhook_url=webhook_url,
             webhook_events=webhook_events,
             remove_webhook=remove_webhook,
@@ -3592,7 +3733,8 @@ class MonitorRunsTool(_MonitorTool):
         "Lists a Desearch monitor's runs, newest first, or reads one run by run_id with "
         "the items it kept (most relevant first). Each run has its status (queued, running, "
         "completed, failed, cancelled) and fail_reason, the time window it searched, per "
-        "source how many items were fetched, new and kept, item_count, the summary (when "
+        "source how many items were fetched, new and kept (and accounts_failed: watched "
+        "accounts that could not be read), item_count, the summary (when "
         "on), and reserved_usd and cost_usd. With run_id and timeout it waits for the run "
         "to end. Free: it never starts a run."
     )
@@ -3645,7 +3787,8 @@ class MonitorRunsTool(_MonitorTool):
 class MonitorItemsToolInput(BaseModel):
     monitor_id: str = Field(min_length=1, description=_MONITOR_ID_DESCRIPTION)
     source: Optional[_MonitorSource] = Field(
-        default=None, description="Only items from this source: web, x, reddit, youtube, threads."
+        default=None,
+        description="Only items from this source: web, x, reddit, youtube, threads, tiktok.",
     )
     limit: int = Field(default=50, ge=1, le=200, description="Items per page (1-200).")
     cursor: Optional[str] = Field(
@@ -3660,8 +3803,9 @@ class MonitorItemsTool(_MonitorTool):
         "Reads everything a Desearch monitor has kept, newest first: per item its source, "
         "url, title, text (cut to 500 characters), author, published_at, score (0-100) "
         "with the screening signals, and source data (X likes, reposts, replies, views; "
-        "Reddit subreddit, score, comments; YouTube channel, views; web domain, "
-        "highlights). Filter by source; page with next_cursor. Free: it never starts a run."
+        "Reddit subreddit, score, comments; YouTube channel, views; TikTok views, likes, "
+        "comments, shares, duration_s, thumbnail; web domain, highlights; and account, for "
+        "an item read from a watched account). Filter by source; page with next_cursor. Free: it never starts a run."
     )
     args_schema: ArgsSchema = MonitorItemsToolInput
 

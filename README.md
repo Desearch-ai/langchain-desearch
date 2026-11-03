@@ -10,7 +10,7 @@ This project integrates the Desearch API with LangChain tools to enable various 
   - **Social Tools**: Public TikTok, Facebook, Instagram, YouTube, Reddit and Threads data, one tool per platform, with cursor paging.
   - **People Tools**: Find people on X, LinkedIn, YouTube and TikTok who match a plain-language description, and browse everyone your searches found.
   - **Company Tools**: Find companies that match a plain-language description, or enrich the domains you have, with public emails, phones, social profiles and leaders.
-  - **Monitor Tools**: Searches that rerun on a schedule over the web, X, Reddit, YouTube and Threads and keep only what is new, with an optional signed webhook.
+  - **Monitor Tools**: Searches that rerun on a schedule over the web, X, Reddit, YouTube, Threads and TikTok (or watch accounts there) and keep only what is new, with an optional signed webhook.
 
 ## Installation
 
@@ -159,16 +159,20 @@ The `company_tools` group contains the [Company Search](https://www.desearch.ai/
 > **Billing and timing**: `company_search_tool` and `company_enrich_tool` are billed. Company Search reserves `count` companies (5-200) and Company Enrich one company per domain, at the route's per-company price ([prices](https://desearch.ai/pricing)); you pay only for the companies a task delivers (at least 2 for Company Search and 1 for Company Enrich when it delivers any), and a task that delivers none is free. A task runs in the background for minutes. The tools wait up to `timeout` seconds (default 300), then return the companies delivered so far with the `task_id`. Call either tool again with only `task_id` to keep waiting: that is free and does not start a new task. `company_tools` is kept out of `search_tools`, so `create_search_agent` never starts a billed task.
 
 #### Monitor Tools
-The `monitor_tools` group contains the Monitors tools. A monitor reruns `query` on a schedule (`interval`: `1h`, `3h`, `6h`, `12h`, `1d` or `7d`) over its `sources` (`web`, `x`, `reddit`, `youtube`, `threads`; default `web` and `x`). Each run searches the time since the previous run, drops everything the monitor has seen before, screens the rest for relevance to `query` and to each of `criteria` (up to 5), and keeps the items whose `score` (0-100, the lowest of those answers) reaches `min_score` (default 60).
-- `MonitorCreateTool` (`monitor_create_tool`): Create a monitor. Takes `query`, `name`, `criteria`, `sources`, `interval`, `min_score`, `summary` (a short digest per run), the web and X options (`web_count` 10/15/20, `x_count` 1-100, `x_lang`, `x_min_likes`), `webhook_url` and `webhook_events`, `metadata` (up to 20 labels) and `run_now` (default true: the first run is queued at once). With a webhook it returns `webhook_secret`, only this once.
-- `MonitorEstimateTool` (`monitor_estimate_tool`): The most one run (`max_run_cost_usd`) and one month of runs can cost for these sources, options, summary and interval. Free.
-- `MonitorsTool` (`monitors_tool`): List your monitors (filter by `status`, page with `cursor`), or read one by `monitor_id`. Free.
-- `MonitorUpdateTool` (`monitor_update_tool`): Change any setting. Only the settings you set change; the web and X options and the webhook events are merged with the current ones. A new `webhook_url` gets a new `webhook_secret`; `remove_webhook` removes the webhook. Free.
-- `MonitorControlTool` (`monitor_control_tool`): `action` `pause`, `resume`, `trigger` (one billed run now; HTTP 409 while a run is queued or running), `delete`, `test_webhook` (a signed test event; reports what your endpoint answered) or `rotate_webhook_secret`. All but `trigger` are free.
-- `MonitorRunsTool` (`monitor_runs_tool`): List a monitor's runs, or read one by `run_id` with the items it kept. With `run_id`, `timeout` waits for the run to end. Free.
-- `MonitorItemsTool` (`monitor_items_tool`): Everything a monitor kept, newest first, filtered by `source` and paged with `cursor`. Each item has its url, title, text (cut to 500 characters), author, `published_at`, `score`, the screening `signals` and source `data` (X likes and views, Reddit subreddit and comments, YouTube channel and views, web domain and highlights). Free.
+The `monitor_tools` group contains the Monitors tools. A monitor reruns `query` on a schedule (`interval`: `1h`, `3h`, `6h`, `12h`, `1d` or `7d`) over its `sources` (`web`, `x`, `reddit`, `youtube`, `threads`, `tiktok`; default `web` and `x`). Each run searches the time since the previous run, drops everything the monitor has seen before, screens the rest for relevance to `query` and to each of `criteria` (up to 5), and keeps the items whose `score` (0-100, the lowest of those answers) reaches `min_score` (default 60).
 
-> **Billing**: creating, reading, changing, pausing and deleting monitors is free. Each run is billed: its searches at their list price, $0.05 per 1,000 items screened, and the summary's LLM usage plus 50% (when `summary` is on). A run holds `max_run_cost_usd` on the balance and bills only what it used; a run with no new items still pays for its searches. A run the balance cannot hold fails and pauses the monitor (`paused_reason` `insufficient_credits`) until you resume it. `monitor_tools` is kept out of `search_tools`, so `create_search_agent` never creates a monitor.
+A source can also watch up to 10 accounts instead of searching: `x_accounts` (`OpenAI`, `@OpenAI` or an x.com URL), `reddit_subreddits` (`LocalLLaMA`, `r/LocalLLaMA` or a URL), `youtube_channels` (`@handle`, a `UC…` channel ID or a URL) and `tiktok_accounts` (`openai`, `@openai` or a URL). Each run then reads every account's newest posts, and `query` and `criteria` still decide what is kept; `min_score: 0` keeps every new post. With X accounts, `x_count` is not used (a timeline page is 20 posts) and `x_lang` and `x_min_likes` still filter. `tiktok_count` (10, 20 or 30, default 10) is per account. The tools send names as given; the API cleans them, returns them cleaned (`OpenAI`, `LocalLLaMA`, `@OpenAI` or `UC…`, `openai`) and answers 422 for a name it cannot read. An account that cannot be read in a run is listed in that run's `stats.sources.<source>.accounts_failed`.
+
+TikTok search has no working date filter and ranks by relevance, so a TikTok keyword monitor finds a new video only when it reaches TikTok's top results. To follow creators, watch their accounts (`tiktok_accounts`).
+- `MonitorCreateTool` (`monitor_create_tool`): Create a monitor. Takes `query`, `name`, `criteria`, `sources`, `interval`, `min_score`, `summary` (a short digest per run), the per-source options (`web_count` 10/15/20, `x_count` 1-100, `x_lang`, `x_min_likes`, `tiktok_count` 10/20/30) and watched accounts (`x_accounts`, `reddit_subreddits`, `youtube_channels`, `tiktok_accounts`), `webhook_url` and `webhook_events`, `metadata` (up to 20 labels) and `run_now` (default true: the first run is queued at once). With a webhook it returns `webhook_secret`, only this once.
+- `MonitorEstimateTool` (`monitor_estimate_tool`): The most one run (`max_run_cost_usd`) and one month of runs can cost for these sources, options (watched accounts included), summary and interval. Free.
+- `MonitorsTool` (`monitors_tool`): List your monitors (filter by `status`, page with `cursor`), or read one by `monitor_id`. Free.
+- `MonitorUpdateTool` (`monitor_update_tool`): Change any setting. Only the settings you set change; the per-source options and the webhook events are merged with the current ones. A new account list replaces that source's watched accounts, and `[]` stops watching. A new `webhook_url` gets a new `webhook_secret`; `remove_webhook` removes the webhook. Free.
+- `MonitorControlTool` (`monitor_control_tool`): `action` `pause`, `resume`, `trigger` (one billed run now; HTTP 409 while a run is queued or running), `delete`, `test_webhook` (a signed test event; reports what your endpoint answered) or `rotate_webhook_secret`. All but `trigger` are free.
+- `MonitorRunsTool` (`monitor_runs_tool`): List a monitor's runs, or read one by `run_id` with the items it kept. Per source, `stats` says how many items were fetched, new and kept, and which watched accounts failed (`accounts_failed`). With `run_id`, `timeout` waits for the run to end. Free.
+- `MonitorItemsTool` (`monitor_items_tool`): Everything a monitor kept, newest first, filtered by `source` and paged with `cursor`. Each item has its url, title, text (cut to 500 characters), author, `published_at`, `score`, the screening `signals` and source `data` (X likes and views, Reddit subreddit and comments, YouTube channel and views, TikTok views, likes, comments, shares, `duration_s` and thumbnail, web domain and highlights). An item read from a watched account also has `data.account`. Free.
+
+> **Billing**: creating, reading, changing, pausing and deleting monitors is free. Each run is billed: its searches at their list price, $0.05 per 1,000 items screened, and the summary's LLM usage plus 50% (when `summary` is on). A run holds `max_run_cost_usd` on the balance and bills only what it used; a run with no new items still pays for its searches. A watched account is one feed read per run at that feed's list price: an X account about $0.003 (a 20-post timeline), a subreddit or YouTube channel $0.00207, and TikTok $0.00207 per post (search or account). A run the balance cannot hold fails and pauses the monitor (`paused_reason` `insufficient_credits`) until you resume it. `monitor_tools` is kept out of `search_tools`, so `create_search_agent` never creates a monitor.
 
 ### Examples
 
@@ -444,13 +448,23 @@ run = MonitorRunsTool().invoke(
     {"monitor_id": monitor["monitor_id"], "run_id": run["run_id"], "timeout": 120}
 )
 print(run["status"], run.get("item_count"), run.get("cost_usd"))
+
+# Watch accounts instead of searching; min_score 0 keeps every new post.
+watch = MonitorCreateTool().invoke({
+    "query": "AI model releases",
+    "sources": ["x", "tiktok"],
+    "x_accounts": ["OpenAI", "@AnthropicAI"],
+    "tiktok_accounts": ["openai"],
+    "min_score": 0,
+    "interval": "6h",
+})
 ```
 
 Each webhook delivery is a POST with `Desearch-Event`, `Desearch-Delivery` and `Desearch-Signature: t=<unix>,v1=<hex>` headers. `v1` is the HMAC-SHA256 of `"<t>.<raw body>"` keyed with `webhook_secret`; reject a `t` older than 5 minutes and compare in constant time (desearch-py 1.13.0 adds a helper for it). A delivery that does not get a 2xx within 10 seconds is retried after 1, 5, 30, 120 and 360 minutes, and after 5 deliveries in a row fail the monitor pauses with `paused_reason` `webhook_failing`.
 
 To give an agent the Monitor tools, pass `monitor_tools` from `langchain_desearch.search_tools` to your agent.
 
-> Monitors call the `/desearch/monitors` routes over HTTP with aiohttp, because the Monitors methods in `desearch-py` arrive in 1.13.0, which is not on PyPI yet. The tools will switch to the SDK once it is published.
+> Monitors call the `/desearch/monitors` routes over HTTP with aiohttp, like People Search and Company Search, because the Monitors methods in `desearch-py` arrive in 1.13.0, which is not on PyPI yet. The tools will switch to the SDK once it is published.
 
 #### Using RAG (Retrieval-Augmented Generation)
 ```python

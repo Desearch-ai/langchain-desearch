@@ -254,7 +254,12 @@ def test_monitor_create_without_run_now_or_webhook(monitor_api):
         {"query": "valid query", "criteria": ["a"] * 6},
         {"query": "valid query", "criteria": ["a" * 301]},
         {"query": "valid query", "sources": []},
-        {"query": "valid query", "sources": ["tiktok"]},
+        {"query": "valid query", "sources": ["facebook"]},
+        {"query": "valid query", "tiktok_count": 15},
+        {"query": "valid query", "x_accounts": [f"user{i}" for i in range(11)]},
+        {"query": "valid query", "reddit_subreddits": ["LocalLLaMA", " "]},
+        {"query": "valid query", "youtube_channels": [f"@c{i}" for i in range(11)]},
+        {"query": "valid query", "tiktok_accounts": [""]},
         {"query": "valid query", "interval": "2h"},
         {"query": "valid query", "min_score": 101},
         {"query": "valid query", "web_count": 12},
@@ -729,7 +734,7 @@ def test_monitor_items_defaults_and_async(monitor_api):
 
 def test_monitor_items_rejects_an_unknown_source():
     with pytest.raises(ValidationError):
-        MonitorItemsToolInput(monitor_id=MONITOR_ID, source="tiktok")
+        MonitorItemsToolInput(monitor_id=MONITOR_ID, source="facebook")
 
 
 def test_compact_item_drops_empty_fields():
@@ -773,3 +778,177 @@ def test_monitor_create_async_invoke(monitor_api):
     (call,) = monitor_api.calls("POST")
     assert call["json"]["sources"] == ["reddit", "youtube", "threads"]
     assert result["monitor_id"] == MONITOR_ID
+
+
+WATCHING = {
+    "x": {"count": 20, "lang": "en", "min_likes": None, "accounts": ["OpenAI", "AnthropicAI"]},
+    "reddit": {"subreddits": ["LocalLLaMA"]},
+    "youtube": {"channels": ["@OpenAI"]},
+    "tiktok": {"count": 20, "accounts": ["openai"]},
+}
+
+
+def test_monitor_create_watches_accounts_and_sends_names_as_given(monitor_api):
+    monitor_api.add(
+        "POST",
+        "/desearch/monitors",
+        201,
+        _monitor(sources=["x", "reddit", "youtube", "tiktok"], options=WATCHING, webhook=None),
+    )
+
+    result = MonitorCreateTool(base_url=monitor_api.base_url).invoke(
+        {
+            "query": "Model releases",
+            "sources": ["x", "reddit", "youtube", "tiktok"],
+            "min_score": 0,
+            "x_accounts": ["@OpenAI", "https://x.com/AnthropicAI"],
+            "x_lang": "en",
+            "reddit_subreddits": ["r/LocalLLaMA"],
+            "youtube_channels": ["https://www.youtube.com/@OpenAI"],
+            "tiktok_count": 20,
+            "tiktok_accounts": ["@openai"],
+        }
+    )
+
+    (call,) = monitor_api.calls("POST", "/desearch/monitors")
+    # The API cleans the names (and answers 422 for one it cannot read).
+    assert call["json"]["options"] == {
+        "x": {"lang": "en", "accounts": ["@OpenAI", "https://x.com/AnthropicAI"]},
+        "reddit": {"subreddits": ["r/LocalLLaMA"]},
+        "youtube": {"channels": ["https://www.youtube.com/@OpenAI"]},
+        "tiktok": {"count": 20, "accounts": ["@openai"]},
+    }
+    assert call["json"]["min_score"] == 0
+    assert call["json"]["sources"] == ["x", "reddit", "youtube", "tiktok"]
+    # The cleaned names come back as the API stored them.
+    assert result["options"]["x"]["accounts"] == ["OpenAI", "AnthropicAI"]
+    assert result["options"]["tiktok"] == {"count": 20, "accounts": ["openai"]}
+
+
+def test_monitor_update_merges_watched_accounts_per_source(monitor_api):
+    monitor_api.add("GET", MONITOR_PATH, 200, _monitor(options=WATCHING))
+    monitor_api.add("PATCH", MONITOR_PATH, 200, _monitor(options=WATCHING))
+
+    MonitorUpdateTool(base_url=monitor_api.base_url).invoke(
+        {"monitor_id": MONITOR_ID, "tiktok_accounts": ["nvidia"], "x_accounts": []}
+    )
+
+    (patch,) = monitor_api.calls("PATCH")
+    assert patch["json"] == {
+        "options": {
+            # [] stops watching X accounts; lang is kept.
+            "x": {"count": 20, "lang": "en", "accounts": []},
+            "reddit": {"subreddits": ["LocalLLaMA"]},
+            "youtube": {"channels": ["@OpenAI"]},
+            # A new list replaces the accounts; count is kept.
+            "tiktok": {"count": 20, "accounts": ["nvidia"]},
+        }
+    }
+
+
+def test_monitor_update_adds_a_source_option_the_monitor_did_not_have(monitor_api):
+    monitor_api.add("GET", MONITOR_PATH, 200, _monitor())
+    monitor_api.add("PATCH", MONITOR_PATH, 200, _monitor())
+
+    MonitorUpdateTool(base_url=monitor_api.base_url).invoke(
+        {
+            "monitor_id": MONITOR_ID,
+            "sources": ["web", "x", "youtube"],
+            "youtube_channels": ["UCXuqSBlHAE6Xw-yeJA0Tunw"],
+        }
+    )
+
+    (patch,) = monitor_api.calls("PATCH")
+    assert patch["json"] == {
+        "sources": ["web", "x", "youtube"],
+        "options": {
+            "x": {"count": 20, "lang": "en"},
+            "web": {"count": 10},
+            "youtube": {"channels": ["UCXuqSBlHAE6Xw-yeJA0Tunw"]},
+        },
+    }
+
+
+def test_monitor_estimate_prices_watched_accounts(monitor_api):
+    monitor_api.add(
+        "POST",
+        "/desearch/monitors/estimate",
+        200,
+        {"max_run_cost_usd": 0.01, "runs_per_month": 30, "max_monthly_cost_usd": 0.3, "breakdown": {}},
+    )
+
+    MonitorEstimateTool(base_url=monitor_api.base_url).invoke(
+        {"sources": ["x", "tiktok"], "x_accounts": ["OpenAI"], "tiktok_count": 30}
+    )
+
+    (call,) = monitor_api.calls("POST")
+    assert call["json"] == {
+        "sources": ["x", "tiktok"],
+        "options": {"x": {"accounts": ["OpenAI"]}, "tiktok": {"count": 30}},
+    }
+
+
+def test_monitor_tiktok_items_keep_their_account_and_stats_keep_failed_accounts(monitor_api):
+    tiktok_item = {
+        **ITEM,
+        "item_id": "1900",
+        "source": "tiktok",
+        "url": "https://www.tiktok.com/@openai/video/7300000000000000001",
+        "text": "Sora update",
+        "data": {
+            "views": 120000,
+            "likes": 5400,
+            "comments": 210,
+            "shares": 95,
+            "duration_s": 31,
+            "thumbnail": "https://p16.tiktokcdn.com/thumb.jpeg",
+            "account": "openai",
+        },
+    }
+    stats = {
+        "sources": {
+            "tiktok": {
+                "fetched": 10,
+                "in_window": 4,
+                "new": 4,
+                "passed": 1,
+                "error": None,
+                "accounts_failed": ["gone_account"],
+            }
+        },
+        "screened": 4,
+        "passed": 1,
+        "screen": "jev",
+    }
+    monitor_api.add(
+        "GET", f"{MONITOR_PATH}/items", 200, {"items": [tiktok_item], "next_cursor": None}
+    )
+    monitor_api.add(
+        "GET", RUN_PATH, 200, _run("completed", item_count=1, stats=stats, items=[tiktok_item])
+    )
+
+    items = MonitorItemsTool(base_url=monitor_api.base_url).invoke(
+        {"monitor_id": MONITOR_ID, "source": "tiktok"}
+    )
+    run = MonitorRunsTool(base_url=monitor_api.base_url).invoke(
+        {"monitor_id": MONITOR_ID, "run_id": RUN_ID}
+    )
+
+    assert monitor_api.calls("GET", f"{MONITOR_PATH}/items")[0]["query"]["source"] == "tiktok"
+    assert items["items"][0]["data"] == tiktok_item["data"]
+    assert run["stats"]["sources"]["tiktok"]["accounts_failed"] == ["gone_account"]
+    assert run["items"][0]["data"]["account"] == "openai"
+
+
+def test_monitor_tool_descriptions_cover_accounts_and_tiktok():
+    create = MonitorCreateTool().description
+    assert "TikTok" in create and "x_accounts" in create and "min_score" in create
+    assert "$0.00207 per post" in create and "about $0.003" in create
+    assert "no working date filter" in create and "tiktok_accounts" in create
+    assert "accounts_failed" in MonitorRunsTool().description
+    items = MonitorItemsTool().description
+    assert "duration_s" in items and "account" in items
+    fields = MonitorCreateToolInput.model_json_schema()["properties"]
+    assert "min_score 0" in fields["x_accounts"]["description"]
+    assert "x_count is not used" in fields["x_accounts"]["description"]
+    assert "ranks by relevance" in fields["tiktok_accounts"]["description"]

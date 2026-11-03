@@ -7,8 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.5.0] - unreleased
 
-> **Do not publish 1.5.0 before the Monitors API is on production.** The
-> Monitors routes are live on api-dev.desearch.ai only. The tools call them
+> **Do not publish 1.5.0 before the Monitors API (with its TikTok source and
+> watched accounts) is on production.** The tools call the Monitors routes
 > over HTTP (`monitors.py`), so this release needs no new desearch-py; it keeps
 > `desearch-py>=1.11.0,<2.0.0`, which must be on PyPI first (see 1.3.0). The
 > version assumes #7 (1.4.0) lands first; if this lands first, it can be 1.4.0.
@@ -44,6 +44,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `webhook_secret` is shown only once.
 - `scripts/e2e-monitors.py`: a live smoke test of every free Monitors action
   with `--base-url` and `--key-env`; `--trigger` adds one billed run.
+- TikTok as a Monitors source (`sources` and the items `source` filter) with
+  `tiktok_count` (10, 20 or 30; per account with accounts).
+- Watched accounts, up to 10 per source: `x_accounts`, `reddit_subreddits`,
+  `youtube_channels` and `tiktok_accounts` on create, estimate and update. A
+  source with accounts reads their newest posts each run instead of
+  searching; `query` and `criteria` still decide what is kept, and
+  `min_score` 0 keeps every new post. Names are sent as given; the API cleans
+  them and returns them cleaned (422 for a name it cannot read). On update a
+  new list replaces that source's accounts, `[]` stops watching, and every
+  other option is kept.
+- Descriptions name what a watched account costs per run (X about $0.003,
+  a subreddit or YouTube channel $0.00207, TikTok $0.00207 per post), TikTok's
+  item `data` (`views`, `likes`, `comments`, `shares`, `duration_s`,
+  `thumbnail`), `data.account` on items from a watched account, and a run's
+  `stats.sources.<source>.accounts_failed`. They also say that TikTok search
+  has no working date filter and ranks by relevance, so a TikTok keyword
+  monitor finds a new video only once it reaches TikTok's top results; to
+  follow creators, watch their accounts (`tiktok_accounts`).
 
 ## [1.3.0] - unreleased
 
