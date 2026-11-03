@@ -19,7 +19,7 @@ Install the package using pip:
 pip install langchain-desearch
 ```
 
-> **Release 1.3.0 waits for desearch-py 1.11.0 on PyPI.** langchain-desearch 1.3.0 requires `desearch-py>=1.11.0,<2.0.0`, the first release with the YouTube, Reddit and Threads methods (it also carries the TikTok, Facebook, Instagram and Search API methods of desearch-py 1.8.0). desearch-py 1.11.0 is not on PyPI yet, so do not publish langchain-desearch 1.3.0 until it is. Until then, install desearch-py 1.11.0 from a checkout of the [desearch.py](https://github.com/Desearch-ai/desearch.py) repository (`pip install -e /path/to/desearch.py`) before installing this package from source. desearch-py 1.11.0 needs Python 3.10 or newer, and so does this release.
+> **Releases 1.3.0 and 1.4.0 wait for desearch-py 1.11.0 on PyPI.** langchain-desearch 1.3.0 and 1.4.0 require `desearch-py>=1.11.0,<2.0.0`, the first release with the YouTube, Reddit and Threads methods (it also carries the TikTok, Facebook, Instagram and Search API methods of desearch-py 1.8.0). desearch-py 1.11.0 is not on PyPI yet, so do not publish langchain-desearch 1.3.0 until it is. Until then, install desearch-py 1.11.0 from a checkout of the [desearch.py](https://github.com/Desearch-ai/desearch.py) repository (`pip install -e /path/to/desearch.py`) before installing this package from source. desearch-py 1.11.0 needs Python 3.10 or newer, and so does this release. The Company Search budget and `continue_from` of 1.4.0 also need the Company Search API release of desearch-public-api#624.
 
 ## Usage
 
@@ -385,9 +385,27 @@ enriched = CompanyEnrichTool().invoke({"domains": ["acme.com", "https://www.beta
 tasks = CompanyTasksTool().invoke({"metadata": {"campaign": "q4-outbound"}})
 ```
 
-`company_search_tool` also takes `min_score`, `exclude` (domains or URLs to leave out, up to 1000), `countries` (ISO codes or names, up to 20) and `require` (`email`, `phone`, `linkedin`, `leader`, `leader_email`: a company without all of them is not delivered or billed). Both start tools take `roles` (`ceo`, `founder`, `cto`, `cfo`, `coo`, `cmo`, `president`, `owner`, `managing_director`; default `ceo`, `founder`, `cto`, `cfo`), `infer_emails` and `verify_emails` (both default true), `metadata` (your own labels) and `idempotency_key`. Values the API would reject are refused before any request is sent, so nothing is billed.
+`company_search_tool` also takes `min_score`, `exclude` (domains or URLs to leave out, up to 1000), `countries` (ISO codes or names, up to 20), `require` (`email`, `phone`, `linkedin`, `leader`, `leader_email`: a company without all of them is not delivered or billed), and `max_cost_usd` and `continue_from` (see below). Both start tools take `roles` (`ceo`, `founder`, `cto`, `cfo`, `coo`, `cmo`, `president`, `owner`, `managing_director`; default `ceo`, `founder`, `cto`, `cfo`), `infer_emails` and `verify_emails` (both default true), `metadata` (your own labels) and `idempotency_key`. Values the API would reject are refused before any request is sent, so nothing is billed.
 
 Each company has `enrichment` with a `status` (`partial` while any stage, such as leaders, inferred emails or email checks, is still `pending`, then `complete`) and each stage. A stage cut by the task's time limit is `skipped`, with an `enrichment.errors` entry and the task's `enrichment_time_limit` warning. The tools read every company again on each call, so they return the latest version. A finished task has `completion_reason`, `coverage_limited` (when a budget stopped it before `count`) and `warnings`, such as `planning_fallback`, `ai_scoring_unavailable`, `enrichment_time_limit` or `linkedin_verification_unavailable`. A People Search `task_id` does not work on the company tools, and a company `task_id` does not work on `people_search_tool`.
+
+**Search budget and continuing a search** (1.4.0, needs the Company Search API release of desearch-public-api#624). Without a budget, a search stops once it costs more than the companies it found pay for: `coverage_limited` is true and `completion_reason` is `cost_limit`, with fewer than `count` companies. Its `next_step` then offers a new search with `continue_from`:
+
+- `continue_from`: the `task_id` of an ended Company Search. The new search leaves out every company that one delivered or held for review, so it only finds new ones. Send the same query and filters with the `count` still wanted. It cannot be combined with `task_id`, which waits on a search instead.
+- `max_cost_usd`: a search budget in USD (above 0, at most 100, at least what `count` reserves; the API refuses a lower one with the minimum and charges nothing). The whole budget is reserved, the search keeps going until it delivers `count` or spends the budget, and its search effort is billed up to the budget even when it finds few companies or none. The unused part is returned. The tool tells the agent to set it only when the user agreed to that budget.
+
+```python
+more = CompanySearchTool().invoke({
+    "query": "Series A fintech startups in Berlin building payment infrastructure",
+    "count": 25,
+    "countries": ["DE"],
+    "require": ["email"],
+    "continue_from": companies["task_id"],
+    "max_cost_usd": 5,  # only with the user's OK: billed up to $5 even if few companies are found
+})
+```
+
+A query can restrict the search to companies it names with their websites ("Restrict this search to Acme (acme.com.au) and Beta (beta.co.uk). Return only those."): only those domains are checked, and the task ends with `completion_reason` `all_domains_processed`. Companies named without their websites do not restrict it, and the task has the warning `scope_not_applied`.
 
 To give an agent the Company tools, pass `company_tools` from `langchain_desearch.search_tools` to your agent. Like the other tools, they set `return_direct=True`; create them with `CompanySearchTool(return_direct=False)` if the agent should read the result and keep going.
 

@@ -2381,6 +2381,10 @@ _TASK_ID_DESCRIPTION = (
     "task_id of a Company Search or Company Enrich task started earlier. Waits on "
     "that task and returns its companies instead of starting a new one. Free."
 )
+_TASK_ID_OR_CONTINUE = (
+    "Set task_id to keep waiting on a search, or continue_from (with query) to start "
+    "a new search that leaves out that one's companies, not both."
+)
 
 
 async def _invoke_companies(
@@ -2449,7 +2453,9 @@ class CompanySearchToolInput(BaseModel):
         description=(
             "The companies to find, in plain language: what they do, where, how far "
             "along. For example 'Series A fintech startups in Berlin building payment "
-            "infrastructure'. Required to start a search."
+            "infrastructure'. Required to start a search. To check only certain "
+            "companies, name them with their websites: 'Restrict this search to Acme "
+            "(acme.com.au) and Beta (beta.co.uk). Return only those.'"
         ),
     )
     count: int = Field(
@@ -2503,6 +2509,31 @@ class CompanySearchToolInput(BaseModel):
     metadata: Optional[Dict[str, str]] = Field(
         default=None, description=_METADATA_DESCRIPTION
     )
+    max_cost_usd: Optional[float] = Field(
+        default=None,
+        gt=0,
+        le=100,
+        description=(
+            "Search budget in USD (up to 100). Leave it unset unless the user agreed to "
+            "spend this amount: the whole budget is reserved, the search keeps looking "
+            "until it delivers count or spends it, and its search effort is billed up to "
+            "the budget even when it finds few companies or none (the unused part is "
+            "returned). It must be at least what count reserves (count times the "
+            "per-company price); a lower one is refused with the minimum, and nothing is "
+            "charged. Without it, a search stops once it costs more than the companies it "
+            "found pay for (coverage_limited, cost_limit)."
+        ),
+    )
+    continue_from: Optional[str] = Field(
+        default=None,
+        description=(
+            "task_id of an ended Company Search to continue: starts a new billed search "
+            "that leaves out every company that one delivered or held for review, so it "
+            "only finds new ones. Send the same query and filters with the count still "
+            "wanted. Offer it when a search ended with coverage_limited. Not for waiting "
+            "on a search: use task_id for that."
+        ),
+    )
     idempotency_key: Optional[str] = Field(
         default=None, max_length=200, description=_IDEMPOTENCY_DESCRIPTION
     )
@@ -2511,6 +2542,8 @@ class CompanySearchToolInput(BaseModel):
 
     @model_validator(mode="after")
     def check_search_or_task(self) -> "CompanySearchToolInput":
+        if self.task_id and self.continue_from:
+            raise ValueError(_TASK_ID_OR_CONTINUE)
         if self.task_id:
             return self
         if not self.query:
@@ -2524,6 +2557,8 @@ class CompanySearchToolInput(BaseModel):
             require=self.require,
             roles=self.roles,
             metadata=self.metadata,
+            max_cost_usd=self.max_cost_usd,
+            continue_from=self.continue_from,
         )
         return self
 
@@ -2539,7 +2574,12 @@ class CompanySearchTool(_CompanyTaskTool):
         "default) with their LinkedIn profiles and emails. BILLED: starting a search "
         "reserves `count` companies at the Company Search price; you pay only for the "
         "companies it delivers (a minimum of 2 when it delivers any), and a search "
-        "that delivers none is free. SLOW: it runs in the background for minutes. This "
+        "that delivers none is free. A search stops early once it costs more than the "
+        "companies it found pay for (coverage_limited, completion_reason cost_limit); "
+        "then offer the user a new search with continue_from=<its task_id>, which skips "
+        "the companies it already delivered. Set max_cost_usd only when the user agreed "
+        "to that budget: it is charged for search effort even when few companies are "
+        "found. SLOW: it runs in the background for minutes. This "
         "tool waits up to `timeout` seconds, then returns the companies delivered so "
         "far and the task_id. To keep waiting, call it again with only task_id (free; "
         "it does not start or bill a new search). For domains you already have, use "
@@ -2559,10 +2599,14 @@ class CompanySearchTool(_CompanyTaskTool):
         infer_emails: Optional[bool],
         verify_emails: Optional[bool],
         metadata: Optional[Dict[str, str]],
+        max_cost_usd: Optional[float],
+        continue_from: Optional[str],
         idempotency_key: Optional[str],
         timeout: int,
         task_id: Optional[str],
     ) -> Dict[str, Any]:
+        if task_id and continue_from:
+            raise ValueError(_TASK_ID_OR_CONTINUE)
         body = None
         if not task_id:
             if not query:
@@ -2580,6 +2624,8 @@ class CompanySearchTool(_CompanyTaskTool):
                 infer_emails=infer_emails,
                 verify_emails=verify_emails,
                 metadata=metadata,
+                max_cost_usd=max_cost_usd,
+                continue_from=continue_from,
             )
         return self._task_kwargs("search", body, idempotency_key, timeout, task_id)
 
@@ -2595,6 +2641,8 @@ class CompanySearchTool(_CompanyTaskTool):
         infer_emails: Optional[bool] = None,
         verify_emails: Optional[bool] = None,
         metadata: Optional[Dict[str, str]] = None,
+        max_cost_usd: Optional[float] = None,
+        continue_from: Optional[str] = None,
         idempotency_key: Optional[str] = None,
         timeout: int = 300,
         task_id: Optional[str] = None,
@@ -2613,6 +2661,8 @@ class CompanySearchTool(_CompanyTaskTool):
             infer_emails,
             verify_emails,
             metadata,
+            max_cost_usd,
+            continue_from,
             idempotency_key,
             timeout,
             task_id,
@@ -2631,6 +2681,8 @@ class CompanySearchTool(_CompanyTaskTool):
         infer_emails: Optional[bool] = None,
         verify_emails: Optional[bool] = None,
         metadata: Optional[Dict[str, str]] = None,
+        max_cost_usd: Optional[float] = None,
+        continue_from: Optional[str] = None,
         idempotency_key: Optional[str] = None,
         timeout: int = 300,
         task_id: Optional[str] = None,
@@ -2649,6 +2701,8 @@ class CompanySearchTool(_CompanyTaskTool):
             infer_emails,
             verify_emails,
             metadata,
+            max_cost_usd,
+            continue_from,
             idempotency_key,
             timeout,
             task_id,

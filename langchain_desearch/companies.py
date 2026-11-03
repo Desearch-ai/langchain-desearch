@@ -10,6 +10,11 @@ desearch-py 1.8.0 is published.
   ``POST /desearch/companies/enrich`` reads the domains you send. Both start a
   background task and are billed: they reserve companies at the route price
   and settle to the companies they deliver. A task that delivers none is free.
+- A search with ``max_cost_usd`` (a budget the user agreed to) reserves the
+  whole budget instead and also bills its search effort, up to the budget,
+  even when it delivers few companies or none. ``continue_from`` starts a
+  search that leaves out the companies an ended search delivered or held for
+  review.
 - Reading a task, its results and the task list, and pausing, resuming or
   cancelling a task, is free.
 
@@ -21,6 +26,7 @@ results without a cursor returns every company in its latest version.
 
 import asyncio
 import re
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
@@ -78,6 +84,9 @@ COMPANY_CONTROL_ACTIONS = ("pause", "resume", "cancel")
 COMPANY_DOMAINS_MAX = 200
 COMPANY_EXCLUDE_MAX = 1000
 COMPANY_COUNTRIES_MAX = 20
+# ``max_cost_usd``: above 0 and at most this. The API also refuses a budget below
+# what ``count`` reserves at the route price (HTTP 422, refunded).
+COMPANY_MAX_BUDGET_USD = 100
 
 # ``metadata`` labels: the API rejects anything else with HTTP 422.
 METADATA_MAX_KEYS = 10
@@ -220,6 +229,8 @@ def company_search_body(
     infer_emails: Optional[bool] = None,
     verify_emails: Optional[bool] = None,
     metadata: Optional[Dict[str, str]] = None,
+    max_cost_usd: Optional[float] = None,
+    continue_from: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Body of ``POST /desearch/companies/search``. Raises ValueError for a value the API would reject."""
     if not isinstance(query, str) or not 3 <= len(query.strip()) <= 1000:
@@ -237,6 +248,17 @@ def company_search_body(
             f"countries can list at most {COMPANY_COUNTRIES_MAX}. Nothing was charged."
         )
     _check_choices("require", require, COMPANY_REQUIREMENTS)
+    if max_cost_usd is not None and (
+        isinstance(max_cost_usd, bool)
+        or not isinstance(max_cost_usd, (int, float))
+        or not 0 < max_cost_usd <= COMPANY_MAX_BUDGET_USD
+    ):
+        raise ValueError(
+            f"max_cost_usd must be a number of USD above 0 and at most "
+            f"{COMPANY_MAX_BUDGET_USD}. Nothing was charged."
+        )
+    if continue_from is not None:
+        continue_from = _task_id_text(continue_from, "continue_from")
     body = _drop_none(
         {"query": query, "count": count, "min_score": min_score, "exclude": exclude}
     )
@@ -248,7 +270,18 @@ def company_search_body(
     )
     if filters:
         body["filters"] = filters
+    body.update(_drop_none({"max_cost_usd": max_cost_usd, "continue_from": continue_from}))
     return _task_options(body, roles, infer_emails, verify_emails, metadata)
+
+
+def _task_id_text(value: Any, name: str) -> str:
+    """A task_id as the API takes it (a UUID), or ValueError before anything is billed."""
+    try:
+        return str(uuid.UUID(str(value).strip()))
+    except ValueError:
+        raise ValueError(
+            f"{name} must be the task_id of an earlier Company Search. Nothing was charged."
+        ) from None
 
 
 def company_enrich_body(
@@ -491,6 +524,7 @@ def compact_company_task(task: Any) -> Dict[str, Any]:
     """Task fields an agent needs: status, why it stopped, warnings and cost."""
     t = _obj(task)
     status = t.get("status")
+    request = _obj(t.get("request"))
     return _compact(
         {
             "task_id": t.get("task_id"),
@@ -501,6 +535,8 @@ def compact_company_task(task: Any) -> Dict[str, Any]:
             "query": t.get("query"),
             "metadata": t.get("metadata"),
             "count": t.get("count"),
+            "max_cost_usd": _number(request.get("max_cost_usd")),
+            "continue_from": _text(request.get("continue_from")),
             "result_count": t.get("result_count"),
             "completion_reason": _text(t.get("completion_reason")),
             "coverage_limited": True if t.get("coverage_limited") is True else None,
@@ -551,10 +587,13 @@ def company_next_step(
         if task.get("coverage_limited") is True:
             count = task.get("count")
             wanted = f"{count} companies" if isinstance(count, int) else "the count asked for"
-            return ended(
+            step = ended(
                 f"Finished early: a budget stopped it ({reason}) before it delivered "
                 f"{wanted}, so more companies may match. These are all the companies it delivered."
             )
+            if task.get("search_type") == "company_enrich":
+                return step
+            return f"{step} {_continue_offer(task, task_id, tool_name)}"
         if reason == "no_candidates":
             return "Finished: its searches found no company to check. Try a broader description."
         if reason == "zero_qualified":
@@ -595,6 +634,27 @@ def company_next_step(
     return (
         f"Still {status or 'running'}. The companies delivered so far are listed; companies "
         f"with enrichment status 'partial' are still being filled in. {keep_waiting}"
+    )
+
+
+def _continue_offer(task: Dict[str, Any], task_id: Optional[str], tool_name: str) -> str:
+    """How to look for more after a search stopped early, and what a budget costs."""
+    budget = _number(_obj(task.get("request")).get("max_cost_usd"))
+    if task.get("completion_reason") == "cost_limit":
+        why = (
+            f"It spent its ${budget:g} search budget. "
+            if budget is not None
+            else "It stopped once it cost more than the companies it found pay for. "
+        )
+    else:
+        why = ""
+    return (
+        f"{why}Offer the user to look for more: call {tool_name} with the same query and "
+        f"filters, count set to the companies still wanted (at least 5) and "
+        f"continue_from='{task_id}', which leaves out every company this search delivered or "
+        "held for review. That is a new billed search. Add max_cost_usd only if the user agreed "
+        "to that budget: it lets the search go further but bills its search effort up to that "
+        "amount, even if it finds few companies or none."
     )
 
 

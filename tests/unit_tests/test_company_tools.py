@@ -548,6 +548,181 @@ def test_company_search_run_refuses_bad_values_without_calling(company_api):
     assert company_api.requests == []
 
 
+EARLIER_TASK_ID = "9d1c2e4f-0a7b-4c3d-8e6f-1a2b3c4d5e6f"
+
+
+def test_company_search_sends_budget_and_continue_from(company_api):
+    request = {
+        "query": "Series A fintech startups in Berlin",
+        "count": 50,
+        "exclude": ["stripe.com", "acme.com"],
+        "max_cost_usd": 5.0,
+        "continue_from": EARLIER_TASK_ID,
+    }
+    company_api.add(
+        "POST",
+        "/desearch/companies/search",
+        202,
+        _task("completed", 0, count=50, request=request, reserved_cost_usd=5.0),
+    )
+
+    result = _search_tool(company_api).invoke(
+        {
+            "query": "Series A fintech startups in Berlin",
+            "count": 50,
+            "exclude": ["stripe.com"],
+            "max_cost_usd": 5,
+            "continue_from": f" {EARLIER_TASK_ID.upper()} ",
+        }
+    )
+
+    (create,) = company_api.calls("POST")
+    assert create["json"] == {
+        "query": "Series A fintech startups in Berlin",
+        "count": 50,
+        "exclude": ["stripe.com"],
+        "max_cost_usd": 5,
+        "continue_from": EARLIER_TASK_ID,
+    }
+    # The task says which budget and which earlier search it ran with.
+    assert result["max_cost_usd"] == 5.0
+    assert result["continue_from"] == EARLIER_TASK_ID
+    assert result["reserved_cost_usd"] == 5.0
+
+
+def test_company_search_async_sends_continue_from_alone(company_api):
+    company_api.add("POST", "/desearch/companies/search", 202, _task("completed", 0))
+
+    result = asyncio.run(
+        _search_tool(company_api).ainvoke(
+            {"query": "Dental clinics in Lisbon", "continue_from": EARLIER_TASK_ID}
+        )
+    )
+
+    assert result["status"] == "completed"
+    (create,) = company_api.calls("POST")
+    assert create["json"] == {
+        "query": "Dental clinics in Lisbon",
+        "count": 25,
+        "continue_from": EARLIER_TASK_ID,
+    }
+    assert "max_cost_usd" not in result
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"query": "Fintech startups", "max_cost_usd": 0},
+        {"query": "Fintech startups", "max_cost_usd": -1},
+        {"query": "Fintech startups", "max_cost_usd": 100.01},
+        {"query": "Fintech startups", "continue_from": "the last search"},
+        {"query": "Fintech startups", "continue_from": ""},
+        # task_id waits on a search; continue_from starts a new one.
+        {"task_id": TASK_ID, "continue_from": EARLIER_TASK_ID},
+    ],
+)
+def test_company_search_budget_and_continue_from_are_validated(payload):
+    with pytest.raises(ValidationError):
+        CompanySearchToolInput(**payload)
+
+
+@pytest.mark.parametrize(
+    "kwargs, message",
+    [
+        ({"query": "Fintech startups", "max_cost_usd": 250}, "max_cost_usd must be"),
+        ({"query": "Fintech startups", "max_cost_usd": True}, "max_cost_usd must be"),
+        ({"query": "Fintech startups", "continue_from": "abc"}, "continue_from must be"),
+        ({"task_id": TASK_ID, "continue_from": EARLIER_TASK_ID}, "not both"),
+    ],
+)
+def test_company_search_run_refuses_a_bad_budget_or_continue_from(
+    company_api, kwargs, message
+):
+    with pytest.raises(ValueError, match=message):
+        _search_tool(company_api)._run(**kwargs)
+    assert company_api.requests == []
+
+
+def test_company_search_budget_below_count_returns_the_api_detail(company_api):
+    detail = (
+        "max_cost_usd must be at least what count reserves: 50 companies at "
+        "$0.045 is $2.25."
+    )
+    company_api.add("POST", "/desearch/companies/search", 422, {"detail": detail})
+
+    result = _search_tool(company_api).invoke(
+        {"query": "Series A fintech startups", "count": 50, "max_cost_usd": 1}
+    )
+
+    assert result == f"An error occurred while calling Desearch: HTTP 422: {detail}"
+
+
+def test_company_search_description_guards_the_budget_and_offers_continue_from():
+    description = CompanySearchTool().description
+    assert "continue_from" in description
+    assert "max_cost_usd only when the user agreed" in description
+    fields = CompanySearchToolInput.model_json_schema()["properties"]
+    assert "Leave it unset unless the user agreed" in fields["max_cost_usd"]["description"]
+    assert "Not for waiting" in fields["continue_from"]["description"]
+
+
+def _stopped_by_cost(**extra):
+    return {
+        "status": "completed",
+        "search_type": "company_search",
+        "count": 50,
+        "result_count": 12,
+        "completion_reason": "cost_limit",
+        "coverage_limited": True,
+        **extra,
+    }
+
+
+def test_next_step_after_a_cost_limit_offers_continue_from():
+    step = company_next_step(
+        _stopped_by_cost(), TASK_ID, "company_search_tool", "company_task_control_tool"
+    )
+    assert step.startswith("Finished early: a budget stopped it (cost_limit)")
+    assert "cost more than the companies it found pay for" in step
+    assert f"continue_from='{TASK_ID}'" in step
+    assert "call company_search_tool" in step
+    assert "Add max_cost_usd only if the user agreed" in step
+
+
+def test_next_step_after_a_spent_budget_says_so():
+    step = company_next_step(
+        _stopped_by_cost(request={"max_cost_usd": 2.5}),
+        TASK_ID,
+        "company_search_tool",
+        "company_task_control_tool",
+    )
+    assert "It spent its $2.5 search budget." in step
+    assert f"continue_from='{TASK_ID}'" in step
+
+
+def test_next_step_after_a_time_limit_offers_continue_from_without_a_cost_reason():
+    step = company_next_step(
+        _stopped_by_cost(completion_reason="time_limit"),
+        TASK_ID,
+        "company_search_tool",
+        "company_task_control_tool",
+    )
+    assert "a budget stopped it (time_limit)" in step
+    assert "pay for" not in step
+    assert f"continue_from='{TASK_ID}'" in step
+
+
+def test_next_step_does_not_offer_continue_from_for_company_enrich():
+    step = company_next_step(
+        _stopped_by_cost(search_type="company_enrich", completion_reason="time_limit"),
+        TASK_ID,
+        "company_enrich_tool",
+        "company_task_control_tool",
+    )
+    assert step.startswith("Finished early")
+    assert "continue_from" not in step
+
+
 def test_company_enrich_sends_domains_and_returns_companies(company_api):
     enrich_task = _task(
         "completed",
