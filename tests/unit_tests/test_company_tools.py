@@ -251,7 +251,9 @@ def test_company_tool_names_groups_and_descriptions():
     for tool in (CompanySearchTool(), CompanyEnrichTool()):
         assert "BILLED" in tool.description
         assert "task_id" in tool.description
-    assert "minimum of 2" in CompanySearchTool().description
+    # Both bill at least 1 company when they deliver any (since the 2026-11-02 prices).
+    assert "minimum of 1" in CompanySearchTool().description
+    assert "minimum of 2" not in CompanySearchTool().description
     assert "minimum of 1" in CompanyEnrichTool().description
     assert "Free" in CompanyTasksTool().description
     assert "cannot be undone" in CompanyTaskControlTool().description

@@ -37,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `query` description says how to restrict a search to named companies:
   name them with their websites.
 
+### Fixed
+
+- The `company_search_tool` description and the README said Company Search
+  bills a minimum of 2 companies when it delivers any. Since the 2026-11-02
+  price release the minimum is 1, as for Company Enrich.
+
 ## [1.3.0] - unreleased
 
 > **Do not publish 1.3.0 before desearch-py 1.11.0 is on PyPI.** This release

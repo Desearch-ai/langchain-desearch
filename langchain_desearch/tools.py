@@ -2573,7 +2573,7 @@ class CompanySearchTool(_CompanyTaskTool):
         "profiles with the page each came from, and leaders (CEO, founders, CTO, CFO by "
         "default) with their LinkedIn profiles and emails. BILLED: starting a search "
         "reserves `count` companies at the Company Search price; you pay only for the "
-        "companies it delivers (a minimum of 2 when it delivers any), and a search "
+        "companies it delivers (a minimum of 1 when it delivers any), and a search "
         "that delivers none is free. A search stops early once it costs more than the "
         "companies it found pay for (coverage_limited, completion_reason cost_limit); "
         "then offer the user a new search with continue_from=<its task_id>, which skips "
