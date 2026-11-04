@@ -65,7 +65,15 @@ SOCIAL_ACTIONS: Dict[str, Dict[str, SocialAction]] = {
         "trending": SocialAction("tiktok_trending", (), ("region", "count"), True),
     },
     "facebook": {
-        "search": SocialAction("facebook_search", ("query",), _PAGE, True),
+        # sort: impressions (the API default, most seen first) or recent (recently
+        # started ads first).
+        "search": SocialAction(
+            "facebook_search",
+            ("query",),
+            ("count", "cursor", "sort"),
+            True,
+            (("sort", ("impressions", "recent")),),
+        ),
         "post": SocialAction("facebook_post_by_id", ("id",)),
         "profile": SocialAction("facebook_profile", ("profile_id",)),
         "profile_posts": SocialAction(

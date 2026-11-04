@@ -10,6 +10,7 @@ This project integrates the Desearch API with LangChain tools to enable various 
   - **Social Tools**: Public TikTok, Facebook, Instagram, YouTube, Reddit and Threads data, one tool per platform, with cursor paging.
   - **People Tools**: Find people on X, LinkedIn, YouTube and TikTok who match a plain-language description, and browse everyone your searches found.
   - **Company Tools**: Find companies that match a plain-language description, or enrich the domains you have, with public emails, phones, social profiles and leaders.
+  - **Monitor Tools**: Searches that rerun on a schedule over the web, X, Reddit, YouTube, Threads, TikTok and the Meta Ad Library (or watch accounts there, TikTok and Instagram hashtags, and accounts on Instagram and Facebook) and keep only what is new, with an optional signed webhook.
 
 ## Installation
 
@@ -25,7 +26,7 @@ pip install langchain-desearch
 
 ### Tools
 
-Every tool is importable from `langchain_desearch.tools`, reads `DESEARCH_API_KEY` from the environment, and works with `invoke` and `ainvoke`. The tools added in 1.2.0 and 1.3.0 are also exported from `langchain_desearch`.
+Every tool is importable from `langchain_desearch.tools`, reads `DESEARCH_API_KEY` from the environment, and works with `invoke` and `ainvoke`. The tools added in 1.2.0, 1.3.0 and 1.5.0 are also exported from `langchain_desearch`.
 
 | Tool class | Tool name | What it returns | desearch-py method | Group |
 | --- | --- | --- | --- | --- |
@@ -96,7 +97,7 @@ The `social_tools` group has one tool per platform: `TikTokTool` (`tiktok_tool`)
 | | `comments` | `video_id` (a post's `id`) | `count`, `cursor` | `tiktok_comments` | yes |
 | | `hashtag` | `tag` | `count`, `cursor` | `tiktok_hashtag` | yes |
 | | `trending` | | `region` (default `US`), `count` | `tiktok_trending` | no |
-| `facebook_tool` | `search` | `query` | `count`, `cursor` | `facebook_search` (Meta Ad Library) | yes |
+| `facebook_tool` | `search` | `query` | `sort`, `count`, `cursor` | `facebook_search` (Meta Ad Library) | yes |
 | | `post` | `id` | | `facebook_post_by_id` | |
 | | `profile` | `profile_id` (ID, username or handle) | | `facebook_profile` | |
 | | `profile_posts` | `profile_id` | `count`, `cursor` | `facebook_profile_posts` | yes |
@@ -132,7 +133,7 @@ The `social_tools` group has one tool per platform: `TikTokTool` (`tiktok_tool`)
 - A leading `@` is removed from `username` and `profile_id`, a leading `#` from `tag`, and a leading `r/` from a subreddit `name`. A YouTube `handle` is sent as is.
 - Fields with a fixed set of values (`type`, `upload_date`, `sort_by`, `duration`, `order`, `sort`, `timeframe`) are checked per action before any request, and `start_date`/`end_date` must be `YYYY-MM-DD`.
 - `youtube_tool` `transcript` returns a not-found error (not charged) when the video has no captions. Each YouTube, Reddit and Threads call is billed as one request, including an empty page.
-- `facebook_tool` `search` and `hashtag` read the public Meta Ad Library, not organic posts.
+- `facebook_tool` `search` and `hashtag` read the public Meta Ad Library, not organic posts. `search` takes `sort`: `impressions` (the API default, most seen ads first) or `recent` (recently started ads first). `sort` needs desearch-py 1.13.0 or later; with an older desearch-py the tool returns an error saying so.
 
 #### People Tools
 The `people_tools` group contains the [People Search](https://www.desearch.ai/docs/guide/apis/people-search) tools:
@@ -156,6 +157,26 @@ The `company_tools` group contains the [Company Search](https://www.desearch.ai/
 - `CompanyTaskControlTool` (`company_task_control_tool`): Pause, resume or cancel a company task (`action`). Free.
 
 > **Billing and timing**: `company_search_tool` and `company_enrich_tool` are billed. Company Search reserves `count` companies (5-200) and Company Enrich one company per domain, at the route's per-company price ([prices](https://desearch.ai/pricing)); you pay only for the companies a task delivers (at least 2 for Company Search and 1 for Company Enrich when it delivers any), and a task that delivers none is free. A task runs in the background for minutes. The tools wait up to `timeout` seconds (default 300), then return the companies delivered so far with the `task_id`. Call either tool again with only `task_id` to keep waiting: that is free and does not start a new task. `company_tools` is kept out of `search_tools`, so `create_search_agent` never starts a billed task.
+
+#### Monitor Tools
+The `monitor_tools` group contains the Monitors tools. A monitor reruns `query` on a schedule (`interval`: `1h`, `3h`, `6h`, `12h`, `1d` or `7d`) over its `sources` (`web`, `x`, `reddit`, `youtube`, `threads`, `tiktok`, `instagram`, `facebook`, `meta_ads`; default `web` and `x`). Each run searches the time since the previous run, drops everything the monitor has seen before, screens the rest with an AI classifier for relevance to `query` and to each of `criteria` (up to 5), and keeps the items whose `score` (0-100, the lowest of those answers) reaches `min_score` (default 60).
+
+A source can also watch up to 10 accounts instead of searching: `x_accounts` (`OpenAI`, `@OpenAI` or an x.com URL), `reddit_subreddits` (`LocalLLaMA`, `r/LocalLLaMA` or a URL), `youtube_channels` (`@handle`, a `UC…` channel ID or a URL), `tiktok_accounts` (`openai`, `@openai` or a URL) and `threads_accounts` (`zuck`, `@zuck` or a URL). Each run then reads every account's newest posts, and `query` and `criteria` still decide what is kept; `min_score: 0` keeps every new post. With X accounts, `x_count` is not used (a timeline page is 20 posts) and `x_lang` and `x_min_likes` still filter. `tiktok_count` (10, 20 or 30, default 10) is per account. The tools send names as given; the API cleans them, returns them cleaned (`OpenAI`, `LocalLLaMA`, `@OpenAI` or `UC…`, `openai`, `zuck`) and answers 422 for a name it cannot read (an X username is at most 15 characters). An account that cannot be read in a run is listed in that run's `stats.sources.<source>.accounts_failed`.
+
+TikTok and Instagram can also watch up to 10 hashtags each: `tiktok_hashtags` and `instagram_hashtags`, in any script (`skincare`, `#სილამაზე`, or a tag URL such as `https://www.tiktok.com/tag/skincare` or `https://www.instagram.com/explore/tags/skincare/`). A hashtag feed lists popular as well as recent posts from any account, so a monitor finds posts outside the accounts it watches; with accounts or hashtags, a source reads those feeds instead of searching by keyword. Each run reads `tiktok_count` posts per TikTok hashtag and up to 12 per Instagram hashtag. The API returns hashtags without `#` and answers 422 for one it cannot read. An item read from a hashtag has `data.hashtag`, and a hashtag that cannot be read is listed in the run's `stats.sources.<source>.hashtags_failed`. Facebook has no organic hashtag feed; for ads by keyword use `meta_ads`.
+
+TikTok search has no working date filter and ranks by relevance, so a TikTok keyword monitor finds a new video only when it reaches TikTok's top results. To follow creators or a tag, watch their accounts (`tiktok_accounts`) or the hashtag (`tiktok_hashtags`). Threads keyword search returns loosely matched posts, so `threads_accounts` work better there too.
+
+Instagram and Facebook have no keyword search for posts, so those sources only read watched feeds: `instagram_accounts` (`openai`, `@openai` or a profile URL; up to 12 posts per account per run) or `instagram_hashtags`, and `facebook_pages` (`NASA`, a numeric page ID or a page URL, with `profile.php?id=…` and `/pages/Name/123…` cleaned to the ID; up to 10 posts per page per run). A monitor with `instagram` in `sources` needs at least one account or hashtag, and one with `facebook` at least one page. The tools leave that rule to the API, which answers 422 on create, and on update when the monitor as changed would have none (for example `facebook_pages: []` while `facebook` is a source); the tools return that as an `HTTP 422` error. `meta_ads` searches the Meta Ad Library by keyword, `meta_ads_count` (10, 20 or 30, default 10) records per run. Its search matches keywords, so the `query` of a monitor with `meta_ads` should be a brand, product or short phrase (`ChatGPT`); a sentence finds nothing. An ad is new the first time a run sees it if it started within the last 30 days. For ads by keyword use `meta_ads`, not `facebook`.
+- `MonitorCreateTool` (`monitor_create_tool`): Create a monitor. Takes `query`, `name`, `criteria`, `sources`, `interval`, `min_score`, `summary` (a short digest per run), the per-source options (`web_count` 10/15/20, `x_count` 1-100, `x_lang`, `x_min_likes`, `tiktok_count` 10/20/30, `meta_ads_count` 10/20/30) and watched accounts (`x_accounts`, `reddit_subreddits`, `youtube_channels`, `tiktok_accounts`, `threads_accounts`, `instagram_accounts`, `facebook_pages`) and hashtags (`tiktok_hashtags`, `instagram_hashtags`), `webhook_url` and `webhook_events`, `metadata` (up to 20 labels) and `run_now` (default true: the first run is queued at once). With a webhook it returns `webhook_secret`, only this once.
+- `MonitorEstimateTool` (`monitor_estimate_tool`): The most one run (`max_run_cost_usd`) and one month of runs can cost for these sources, options (watched accounts and hashtags included), summary and interval, with a `breakdown` per source, `screening` and `summary`. It prices `instagram` or `facebook` without accounts or hashtags as one account. Free.
+- `MonitorsTool` (`monitors_tool`): List your monitors (filter by `status`, page with `cursor`), or read one by `monitor_id`. Free. A monitor's `webhook` carries `last_delivery`, its newest delivery as the API returns it (`event`, `status` `pending`, `delivered` or `failed`, `attempts`, `status_code`, `error`, `created_at`, `next_attempt_at`, `delivered_at`), or `null` before the first delivery. `pending` waits for its first or next attempt, with the last answer in `status_code` and `error`; `failed` used every retry.
+- `MonitorUpdateTool` (`monitor_update_tool`): Change any setting. Only the settings you set change; the per-source options and the webhook events are merged with the current ones. A new account or hashtag list replaces that source's watched accounts or hashtags, and `[]` stops watching (for `instagram` and `facebook` the API answers 422 while the source has nothing left to watch). A new `webhook_url` gets a new `webhook_secret`; `remove_webhook` removes the webhook. Free.
+- `MonitorControlTool` (`monitor_control_tool`): `action` `pause`, `resume`, `trigger` (one billed run now; HTTP 409 while a run is queued or running), `delete`, `test_webhook` (a signed test event; reports what your endpoint answered) or `rotate_webhook_secret`. All but `trigger` are free.
+- `MonitorRunsTool` (`monitor_runs_tool`): List a monitor's runs, or read one by `run_id` with the items it kept. Per source, `stats` says how many items were fetched, new and kept, and which watched accounts and hashtags failed (`accounts_failed`, `hashtags_failed`); `stats.screen` is `ai` (screened by an AI classifier) or `keyword` (the fallback). With `run_id`, `timeout` waits for the run to end. Free.
+- `MonitorItemsTool` (`monitor_items_tool`): Everything a monitor kept, newest first, filtered by `source` and paged with `cursor`. Each item has its url, title, text (cut to 500 characters), author, `published_at`, `score`, the screening `signals` (`relevant`, `new_info`, and `criteria`, the lowest answer across them, when the monitor has criteria) and source `data`: X `likes`, `reposts`, `replies`, `views`; Reddit `subreddit`, `score`, `comments`; YouTube `channel`, `views`, `thumbnail`; TikTok `views`, `likes`, `comments`, `shares`, `saves`, `duration_s`; Threads `likes`; Instagram `likes`, `comments`, `views`, `media_type`; Facebook `reactions`, `comments`, `shares`, `views`; Meta ads `page`, `active`, `cta`, `link` (the landing page), `platforms`, `thumbnail`, with the ad headline as `title` and `url` the Ad Library record; web `highlights`, `domain`. TikTok, Instagram and Facebook items also have `post_id` (the ID the API's `GET /desearch/social/post` gives the same post; an Instagram shortcode), `type` (`video`, `image`, `carousel`, `reel`, …), `hashtags`, `mentions` (TikTok and Instagram), `media` (links to the post's videos and pictures) and `thumbnail`; media and thumbnail links expire after a few days. The metrics are the post's when the run found it; `GET /desearch/social/post?url=<link>` reads them again (`author=true` adds the author's followers). An item read from a watched account also has `data.account`, and one read from a watched hashtag `data.hashtag`. `source` filters by any of the sources. Free.
+
+> **Billing**: creating, reading, changing, pausing and deleting monitors is free. Each run is billed: its searches at their list price, AI screening at $0.05 per 1,000 items screened, and the summary's LLM usage plus 50% (when `summary` is on). A run holds `max_run_cost_usd` on the balance and bills only what it used; a run with no new items still pays for its searches. TikTok, Instagram, Facebook and Meta ads are billed per read, $3.00 per 1,000 reads ($0.003 a read), whatever the number of posts a read returns: one read per watched account, hashtag or Facebook page, one per TikTok keyword search, and one per Ad Library search (whatever `meta_ads_count`). A read that returns nothing is free, except an empty or private TikTok account, which takes two reads, so a run's hold counts two reads per TikTok account. The other sources pay their feed's list price: an X account about $0.003 (a 20-post timeline), and a subreddit, YouTube channel or Threads account $0.00207. A run the balance cannot hold fails and pauses the monitor (`paused_reason` `insufficient_credits`) until you resume it. `monitor_tools` is kept out of `search_tools`, so `create_search_agent` never creates a monitor.
 
 ### Examples
 
@@ -267,6 +288,8 @@ comments = instagram.invoke({"action": "comments", "shortcode": shortcode})
 # Facebook search reads the Meta Ad Library.
 ads = FacebookTool().invoke({"action": "search", "query": "running shoes", "count": 10})
 print(len(ads["results"]), ads["next_cursor"])
+# sort="recent" puts recently started ads first (the default is impressions).
+recent = FacebookTool().invoke({"action": "search", "query": "running shoes", "sort": "recent"})
 ```
 
 #### Using the YouTube, Reddit and Threads Tools
@@ -393,6 +416,85 @@ To give an agent the Company tools, pass `company_tools` from `langchain_desearc
 
 > Company Search calls the `/desearch/companies` routes over HTTP with aiohttp, because the Company Search methods in `desearch-py` arrive in 1.8.0, which is not on PyPI yet. The tools will switch to the SDK once it is published.
 
+#### Using Monitors
+```python
+from langchain_desearch.tools import (
+    MonitorControlTool,
+    MonitorCreateTool,
+    MonitorEstimateTool,
+    MonitorItemsTool,
+    MonitorRunsTool,
+)
+from dotenv import load_dotenv
+load_dotenv()
+
+# What can it cost? (free)
+estimate = MonitorEstimateTool().invoke({"sources": ["web", "x", "reddit"], "interval": "1d"})
+print(estimate["max_run_cost_usd"], estimate["max_monthly_cost_usd"])
+
+# Create it (free); the first run is queued at once and billed.
+monitor = MonitorCreateTool().invoke({
+    "query": "Bittensor subnet launches and updates",
+    "criteria": ["Announces a new subnet, release or partnership"],
+    "sources": ["web", "x", "reddit"],
+    "interval": "1d",
+    "webhook_url": "https://example.com/hooks/desearch",
+    "metadata": {"team": "growth"},
+})
+secret = monitor["webhook_secret"]  # returned only once: store it
+
+# Everything it kept so far, newest first (free).
+items = MonitorItemsTool().invoke({"monitor_id": monitor["monitor_id"], "source": "x"})
+for item in items["items"]:
+    print(item["score"], item.get("url"), item.get("text"))
+
+# Run it again now (billed) and wait up to 2 minutes for the run.
+run = MonitorControlTool().invoke({"monitor_id": monitor["monitor_id"], "action": "trigger"})
+run = MonitorRunsTool().invoke(
+    {"monitor_id": monitor["monitor_id"], "run_id": run["run_id"], "timeout": 120}
+)
+print(run["status"], run.get("item_count"), run.get("cost_usd"))
+
+# Watch accounts instead of searching; min_score 0 keeps every new post.
+watch = MonitorCreateTool().invoke({
+    "query": "AI model releases",
+    "sources": ["x", "tiktok"],
+    "x_accounts": ["OpenAI", "@AnthropicAI"],
+    "tiktok_accounts": ["openai"],
+    "min_score": 0,
+    "interval": "6h",
+})
+
+# Watch hashtags (any script): posts from any account. Instagram needs no accounts.
+tags = MonitorCreateTool().invoke({
+    "query": "Posts about our skincare brand",
+    "sources": ["tiktok", "instagram"],
+    "tiktok_hashtags": ["#სილამაზე", "https://www.tiktok.com/tag/skincare"],
+    "instagram_hashtags": ["skincare", "სილამაზე"],
+    "min_score": 0,
+})
+print(tags["options"]["tiktok"]["hashtags"])  # ['სილამაზე', 'skincare']
+
+# Instagram and Facebook read only watched accounts; Meta ads match a keyword query.
+brand = MonitorCreateTool().invoke({
+    "query": "ChatGPT",
+    "sources": ["instagram", "facebook", "meta_ads", "threads"],
+    "instagram_accounts": ["openai"],
+    "facebook_pages": ["https://www.facebook.com/profile.php?id=100064869009429"],
+    "threads_accounts": ["@zuck"],
+    "meta_ads_count": 20,
+    "webhook_url": "https://example.com/hooks/desearch",
+    "run_now": False,
+})
+print(brand["options"]["facebook"], brand["webhook"]["last_delivery"])  # {'pages': ['100064869009429']} None
+```
+
+Each webhook delivery is a POST with `Desearch-Event`, `Desearch-Delivery` and `Desearch-Signature: t=<unix>,v1=<hex>` headers. `v1` is the HMAC-SHA256 of `"<t>.<raw body>"` keyed with `webhook_secret`; reject a `t` older than 5 minutes and compare in constant time (desearch-py 1.13.0 adds a helper for it). A delivery that does not get a 2xx within 10 seconds is retried after 1, 5, 30, 120 and 360 minutes, and after 5 deliveries in a row fail the monitor pauses with `paused_reason` `webhook_failing`. `monitors_tool` shows the newest delivery in `webhook.last_delivery` (`pending` while it waits for a retry). `test_webhook` sends a signed `monitor.test` event; it is not a delivery and leaves `last_delivery` unchanged.
+
+To give an agent the Monitor tools, pass `monitor_tools` from `langchain_desearch.search_tools` to your agent.
+
+> Monitors call the `/desearch/monitors` routes over HTTP with aiohttp, like People Search and Company Search, because the Monitors methods in `desearch-py` arrive in 1.13.0, which is not on PyPI yet. The tools will switch to the SDK once it is published.
+
 #### Using RAG (Retrieval-Augmented Generation)
 ```python
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
@@ -510,6 +612,11 @@ DESEARCH_API_KEY=... python scripts/e2e-youtube-reddit-threads.py
 python scripts/e2e-youtube-reddit-threads.py --base-url https://api-dev.desearch.ai --key-env DESEARCH_DEV_API_KEY
 ```
 
+`scripts/e2e-monitors.py` creates one monitor without a first run, calls every free Monitors action once (read, list, estimate, update, pause, resume, runs, items, webhook test, secret rotation, webhook removal) and deletes the monitor at the end. Everything it calls is free; `--trigger` also runs the monitor once and waits for the run (billed, about $0.002-0.02). `--with-accounts` also checks watched accounts and the TikTok source, then the Instagram, Facebook and Meta ads sources and Threads accounts: cleaned names, a 422 for instagram or facebook without accounts (on create and on update), the estimate's breakdown per source, `webhook.last_delivery` null on a new monitor, and items by `source` `meta_ads`. Those monitors are created with `run_now: false`, never triggered, and deleted at the end, also when a check fails:
+```bash
+python scripts/e2e-monitors.py --base-url https://api-dev.desearch.ai --key-env DESEARCH_DEV_API_KEY [--with-accounts]
+```
+
 ## Project Structure
 
 ```
@@ -520,6 +627,7 @@ langchain_desearch/
 │   ├── people.py
 │   ├── social.py
 │   ├── companies.py
+│   ├── monitors.py
 │   ├── search_tools.py
 │   ├── agent.py
 ├── examples/
