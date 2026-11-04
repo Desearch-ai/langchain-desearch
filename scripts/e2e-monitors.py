@@ -471,13 +471,13 @@ SOCIAL_CLEANED = {
     "meta_ads": {"count": 20},
     "threads": {"accounts": ["zuck"]},
 }
-# Most a run of SOCIAL can cost per source (desearch-public-api#644): an Instagram account
-# $0.02484, a Facebook page $0.0207, Meta ads $0.00207 per record, a Threads account
-# $0.00207.
+# Most a run of SOCIAL can cost per source: an Instagram account, a Facebook page and the
+# Ad Library search (whatever meta_ads_count) are one read each at $3.00 per 1,000 reads;
+# a Threads account is $0.00207.
 SOCIAL_PRICES = {
-    "instagram": 2 * 0.02484,
-    "facebook": 2 * 0.0207,
-    "meta_ads": 20 * 0.00207,
+    "instagram": 2 * 0.003,
+    "facebook": 2 * 0.003,
+    "meta_ads": 0.003,
     "threads": 0.00207,
 }
 ACCOUNT_DETAIL = {"instagram": "options.instagram.accounts", "facebook": "options.facebook.pages"}

@@ -3009,13 +3009,13 @@ _MONITOR_BILLING = (
     "Creating, reading, changing and deleting monitors is free. Each run is billed: its "
     "searches at their list price, AI screening at $0.05 per 1,000 items screened, and the summary's LLM "
     "usage plus 50% (when summary is on). A run holds max_run_cost_usd on the balance and "
-    "bills only what it used; a run with no new items still pays for its searches. A "
-    "watched account is one feed read per run: an X account about $0.003 (a 20-post "
-    "timeline), a subreddit, YouTube channel or Threads account $0.00207, TikTok $0.00207 "
-    "per post (search, account or hashtag), an Instagram account or hashtag $0.02484 (up "
-    "to 12 posts) and a "
-    "Facebook page $0.0207 (up to 10 posts). Meta ads cost $0.0207 per 10 Ad Library "
-    "records (meta_ads_count 10 is $0.0207, 30 is $0.0621)."
+    "bills only what it used; a run with no new items still pays for its searches. "
+    "TikTok, Instagram, Facebook and Meta ads are billed per read, $3.00 per 1,000 reads "
+    "($0.003 a read), whatever the number of posts: one read per watched account, hashtag "
+    "or Facebook page, per TikTok keyword search and per Ad Library search; an empty or "
+    "private TikTok account takes two reads. The other sources pay their feed's list "
+    "price: an X account about $0.003 (a 20-post timeline), a subreddit, YouTube channel "
+    "or Threads account $0.00207."
 )
 _MONITOR_ID_DESCRIPTION = "monitor_id returned when the monitor was created."
 _MONITOR_QUERY_DESCRIPTION = (
@@ -3065,7 +3065,7 @@ _MONITOR_YOUTUBE_CHANNELS_DESCRIPTION = (
 )
 _MONITOR_TIKTOK_COUNT_DESCRIPTION = (
     "TikTok posts read per run, per account and per hashtag with tiktok_accounts or "
-    "tiktok_hashtags: 10, 20 or 30 (default 10)."
+    "tiktok_hashtags: 10, 20 or 30 (default 10). Billed per read, not per post."
 )
 _MONITOR_TIKTOK_SEARCH_NOTE = (
     "TikTok search has no working date filter and ranks by relevance, so a TikTok keyword "
@@ -3087,12 +3087,12 @@ _MONITOR_HASHTAGS_NOTE = (
 )
 _MONITOR_TIKTOK_HASHTAGS_DESCRIPTION = (
     "TikTok hashtags to watch: 'skincare', '#სილამაზე' or a tiktok.com/tag/... URL; "
-    f"tiktok_count posts per hashtag per run at $0.00207 each. {_MONITOR_HASHTAGS_NOTE}"
+    f"tiktok_count posts per hashtag per run, one read ($0.003) per hashtag. {_MONITOR_HASHTAGS_NOTE}"
 )
 _MONITOR_INSTAGRAM_HASHTAGS_DESCRIPTION = (
     "Instagram hashtags to watch with the instagram source: 'skincare', '#სილამაზე' or an "
-    "instagram.com/explore/tags/... URL; up to 12 posts per hashtag per run, $0.02484 per "
-    f"hashtag. The instagram source needs these or instagram_accounts. {_MONITOR_HASHTAGS_NOTE}"
+    "instagram.com/explore/tags/... URL; up to 12 posts per hashtag per run, one read "
+    f"($0.003) per hashtag. The instagram source needs these or instagram_accounts. {_MONITOR_HASHTAGS_NOTE}"
 )
 _MONITOR_THREADS_ACCOUNTS_DESCRIPTION = (
     "Threads accounts to watch: 'zuck', '@zuck' or a profile URL, $0.00207 per account per "
@@ -3107,7 +3107,7 @@ _MONITOR_ACCOUNT_ONLY_NOTE = (
 )
 _MONITOR_INSTAGRAM_ACCOUNTS_DESCRIPTION = (
     "Instagram accounts to watch with the instagram source: 'openai', '@openai' or a "
-    "profile URL, up to 10. Up to 12 posts per account per run, $0.02484 per account. "
+    "profile URL, up to 10. Up to 12 posts per account per run, one read ($0.003) per account. "
     "The instagram source has no keyword search for posts, so it reads only these and "
     "instagram_hashtags, and needs one of them (HTTP 422 without either, on create and on "
     "update). Each run reads their newest posts; query and criteria still decide what is "
@@ -3116,7 +3116,7 @@ _MONITOR_INSTAGRAM_ACCOUNTS_DESCRIPTION = (
 _MONITOR_FACEBOOK_PAGES_DESCRIPTION = (
     "Facebook pages to watch with the facebook source: a page name ('NASA'), a numeric "
     "page ID or a page URL (profile.php?id=... and /pages/Name/123... become the ID). Up "
-    f"to 10 posts per page per run, $0.0207 per page. {_MONITOR_ACCOUNT_ONLY_NOTE} Facebook "
+    f"to 10 posts per page per run, one read ($0.003) per page. {_MONITOR_ACCOUNT_ONLY_NOTE} Facebook "
     "has no organic hashtag feed; for ads by keyword, use the meta_ads source."
 )
 _MONITOR_META_ADS_NOTE = (
@@ -3126,7 +3126,7 @@ _MONITOR_META_ADS_NOTE = (
 )
 _MONITOR_META_ADS_COUNT_DESCRIPTION = (
     "Meta Ad Library records read per run with the meta_ads source: 10, 20 or 30 (default "
-    f"10; 10 is $0.0207, 30 is $0.0621). {_MONITOR_META_ADS_NOTE}"
+    f"10). The search is one read per run ($0.003), whatever the count. {_MONITOR_META_ADS_NOTE}"
 )
 _MONITOR_WEBHOOK_URL_DESCRIPTION = (
     "HTTPS URL on a public address that receives new items as signed POSTs. Redirects "

@@ -57,7 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new list replaces that source's accounts, `[]` stops watching, and every
   other option is kept.
 - Descriptions name what a watched account costs per run (X about $0.003,
-  a subreddit or YouTube channel $0.00207, TikTok $0.00207 per post), TikTok's
+  a subreddit or YouTube channel $0.00207, TikTok one read), TikTok's
   item `data` (`views`, `likes`, `comments`, `shares`, `duration_s`,
   `thumbnail`), `data.account` on items from a watched account, and a run's
   `stats.sources.<source>.accounts_failed`. They also say that TikTok search
@@ -79,9 +79,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the first time a run sees it if it started within 30 days.
   - `threads_accounts` (up to 10): Threads keyword search returns loosely
     matched posts, so accounts work better.
-  - Prices in the descriptions: a Threads account $0.00207 per run, an
-    Instagram account $0.02484 (up to 12 posts), a Facebook page $0.0207 (up to
-    10 posts), Meta ads $0.0207 per 10 records (30 is $0.0621).
+  - Prices in the descriptions: a Threads account $0.00207 per run; an
+    Instagram account, a Facebook page and the Meta ads search one read each
+    (see the per-read billing entry).
   - Item `data` per source in the descriptions: Threads `likes`; Instagram
     `likes`, `comments`, `views`, `media_type`, `thumbnail`; Facebook
     `reactions`, `comments`, `shares`; Meta ads `page`, `active`, `cta`, `link`,
@@ -93,11 +93,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `options.instagram.hashtags`. A hashtag feed lists posts from any account, so
   a monitor finds posts outside the accounts it watches; `instagram` needs
   accounts or hashtags. Update merges them like accounts (`[]` stops
-  watching). The descriptions give the prices (a TikTok hashtag `tiktok_count`
-  posts at $0.00207, an Instagram hashtag $0.02484), `data.hashtag`,
+  watching). The descriptions give the prices (one read per hashtag),
+  `data.hashtag`,
   `stats.sources.<source>.hashtags_failed`, `stats.screen` (`ai` or
   `keyword`) and the TikTok, Instagram and Facebook post fields (`post_id`,
   `type`, `hashtags`, `mentions`, `media`, TikTok `saves`, Facebook `views`).
+- Per-read billing in the descriptions, module docs and README: TikTok,
+  Instagram, Facebook and Meta ads reads are billed per read ($3.00 per 1,000
+  reads), whatever the number of posts a read returns: one per watched
+  account, hashtag, Facebook page, TikTok keyword search or Ad Library search;
+  an empty or private TikTok account takes two reads. X timelines,
+  subreddits, YouTube channels and Threads keep their list prices.
 - A monitor's `webhook` passes `last_delivery` through: the newest delivery
   (`event`, `status` `pending`/`delivered`/`failed`, `attempts`,
   `status_code`, `error`, `created_at`, `next_attempt_at`, `delivered_at`), or

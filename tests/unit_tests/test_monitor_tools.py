@@ -1060,7 +1060,7 @@ def test_monitor_tool_descriptions_cover_hashtags_and_post_fields():
     assert "AI classifier" in create
     fields = MonitorCreateToolInput.model_json_schema()["properties"]
     assert "from any account" in fields["tiktok_hashtags"]["description"]
-    assert "$0.02484 per hashtag" in fields["instagram_hashtags"]["description"]
+    assert "one read ($0.003) per hashtag" in fields["instagram_hashtags"]["description"]
     assert fields["tiktok_hashtags"]["anyOf"][0]["maxItems"] == 10
     items = MonitorItemsTool().description
     for text in ("post_id", "saves", "mentions", "media", "hashtag, for one"):
@@ -1074,7 +1074,7 @@ def test_monitor_tool_descriptions_cover_hashtags_and_post_fields():
 def test_monitor_tool_descriptions_cover_accounts_and_tiktok():
     create = MonitorCreateTool().description
     assert "TikTok" in create and "x_accounts" in create and "min_score" in create
-    assert "$0.00207 per post" in create and "about $0.003" in create
+    assert "billed per read, $3.00 per 1,000 reads" in create and "about $0.003" in create
     assert "no working date filter" in create and "tiktok_accounts" in create
     assert "accounts_failed" in MonitorRunsTool().description
     items = MonitorItemsTool().description
@@ -1214,15 +1214,15 @@ def test_monitor_update_merges_the_new_source_options(monitor_api):
 def test_monitor_estimate_prices_the_new_sources(monitor_api):
     breakdown = {
         "threads": 0.00207,
-        "instagram": 0.04968,
-        "facebook": 0.0207,
-        "meta_ads": 0.0414,
+        "instagram": 0.006,
+        "facebook": 0.003,
+        "meta_ads": 0.003,
         "screening": 0.0001,
     }
     estimate = {
-        "max_run_cost_usd": 0.11395,
+        "max_run_cost_usd": 0.01417,
         "runs_per_month": 30,
-        "max_monthly_cost_usd": 3.4185,
+        "max_monthly_cost_usd": 0.4251,
         "breakdown": breakdown,
     }
     monitor_api.add("POST", "/desearch/monitors/estimate", 200, estimate)
@@ -1376,16 +1376,15 @@ def test_monitor_tool_descriptions_cover_the_social_sources():
         "threads_accounts",
         "HTTP 422",
         "a sentence finds nothing",
-        "$0.02484",
-        "$0.0207",
-        "$0.0621",
+        "$3.00 per 1,000 reads",
+        "an empty or private TikTok account takes two reads",
     ):
         assert text in create, text
     fields = MonitorCreateToolInput.model_json_schema()["properties"]
     assert "instagram" in fields["sources"]["description"]
     assert "instagram_hashtags, and needs one of them" in fields["instagram_accounts"]["description"]
-    assert "$0.02484 per account" in fields["instagram_accounts"]["description"]
-    assert "$0.0207 per page" in fields["facebook_pages"]["description"]
+    assert "one read ($0.003) per account" in fields["instagram_accounts"]["description"]
+    assert "one read ($0.003) per page" in fields["facebook_pages"]["description"]
     assert "profile.php?id=" in fields["facebook_pages"]["description"]
     assert "$0.00207 per account" in fields["threads_accounts"]["description"]
     assert fields["meta_ads_count"]["anyOf"][0]["enum"] == [10, 20, 30]

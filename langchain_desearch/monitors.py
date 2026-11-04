@@ -22,14 +22,15 @@ tools to the SDK methods once desearch-py 1.13.0 is published.
   per 1,000 items screened, and the summary's LLM usage plus 50%. A run holds
   the monitor's ``max_run_cost_usd`` on the balance and bills only what it used;
   a run with no new items still pays for its searches.
-- A watched account is one feed call per run at that feed's list price: an X
-  timeline (20 posts) is about $0.003, a subreddit or YouTube channel $0.00207,
-  a TikTok profile or hashtag ``tiktok_count`` posts at $0.00207 per post.
-- A Threads account is one request per run ($0.00207). An Instagram account or
-  hashtag is up to 12 posts at the per-post price ($0.02484 per run) and a
-  Facebook page up
-  to 10 ($0.0207 per run). Meta ads are ``meta_ads_count`` Ad Library records
-  per run: 10 is $0.0207, 30 is $0.0621.
+- TikTok, Instagram, Facebook and Meta ads are billed per read, $3.00 per
+  1,000 reads ($0.003 a read), whatever the number of posts a read returns:
+  one read per watched account, hashtag or Facebook page, one per TikTok
+  keyword search and one per Ad Library search (whatever ``meta_ads_count``).
+  A read that returns nothing is free, except an empty or private TikTok
+  account, which takes two reads, so a run's hold counts two per TikTok
+  account.
+- The other sources pay their feed's list price: an X timeline (20 posts) is
+  about $0.003, and a subreddit, YouTube channel or Threads account $0.00207.
 - TikTok search has no working date filter and ranks by relevance, so a TikTok
   keyword monitor finds a new video only when it reaches TikTok's top results;
   to follow creators or a tag, watch their accounts (``tiktok_accounts``) or the
