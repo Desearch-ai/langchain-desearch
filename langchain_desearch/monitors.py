@@ -1,12 +1,12 @@
 """Monitors on the Desearch API (``/desearch/monitors/*``).
 
 A monitor reruns a search over the web, X, Reddit, YouTube, Threads, TikTok and
-the Meta Ad Library, or watches Instagram accounts and Facebook pages, on a
-schedule (every 1h, 3h, 6h, 12h, 1d or 7d) and keeps only what is new. Each
-run searches the window since the previous run ended (or, for a source that
-watches accounts, reads each account's newest posts), drops every item the
-monitor has already seen, screens the rest with Jev (``relevant``, ``new_info`` and one
-yes/no question per criterion; ``score`` is the lowest of ``relevant`` and the
+the Meta Ad Library, or watches accounts, TikTok and Instagram hashtags, and
+Facebook pages, on a schedule (every 1h, 3h, 6h, 12h, 1d or 7d) and keeps only
+what is new. Each run searches the window since the previous run ended (or, for
+a source that watches accounts or hashtags, reads each feed's newest posts),
+drops every item the monitor has already seen, screens the rest with an AI
+classifier (``relevant``, ``new_info`` and one yes/no question per criterion; ``score`` is the lowest of ``relevant`` and the
 criteria, 0-100) and keeps the items at ``min_score`` or above. Kept items go to
 an optional signed webhook and stay readable here, newest first.
 
@@ -18,24 +18,33 @@ tools to the SDK methods once desearch-py 1.13.0 is published.
 
 - Creating, reading, changing, pausing and deleting monitors is free, and so
   are webhook tests and secret rotation.
-- Each run is billed: its searches at their list price, Jev screening at $0.05
+- Each run is billed: its searches at their list price, AI screening at $0.05
   per 1,000 items screened, and the summary's LLM usage plus 50%. A run holds
   the monitor's ``max_run_cost_usd`` on the balance and bills only what it used;
   a run with no new items still pays for its searches.
 - A watched account is one feed call per run at that feed's list price: an X
   timeline (20 posts) is about $0.003, a subreddit or YouTube channel $0.00207,
-  a TikTok profile ``tiktok_count`` posts at $0.00207 per post.
-- A Threads account is one request per run ($0.00207). An Instagram account is
-  up to 12 posts at the per-post price ($0.02484 per run) and a Facebook page up
+  a TikTok profile or hashtag ``tiktok_count`` posts at $0.00207 per post.
+- A Threads account is one request per run ($0.00207). An Instagram account or
+  hashtag is up to 12 posts at the per-post price ($0.02484 per run) and a
+  Facebook page up
   to 10 ($0.0207 per run). Meta ads are ``meta_ads_count`` Ad Library records
   per run: 10 is $0.0207, 30 is $0.0621.
 - TikTok search has no working date filter and ranks by relevance, so a TikTok
   keyword monitor finds a new video only when it reaches TikTok's top results;
-  to follow creators, watch their accounts (``tiktok_accounts``). Threads search
+  to follow creators or a tag, watch their accounts (``tiktok_accounts``) or the
+  hashtag (``tiktok_hashtags``). Threads search
   returns loosely matched posts, so ``threads_accounts`` work better there too.
+- TikTok and Instagram can watch up to 10 hashtags each (``tiktok_hashtags``,
+  ``instagram_hashtags``; any script, ``aversi``, ``#ავერსი`` or a tag URL). A
+  hashtag feed lists posts from any account, so a monitor finds posts outside
+  the accounts it watches. Items read from a hashtag have ``data.hashtag``, and a
+  run lists hashtags it could not read in
+  ``stats.sources.<source>.hashtags_failed``.
 - Instagram and Facebook have no keyword search for posts: those sources read
-  only watched accounts (``instagram_accounts``, ``facebook_pages``), and the API
-  answers 422 for either without any. Meta ads match keywords, so a monitor with
+  only watched feeds (``instagram_accounts`` or ``instagram_hashtags``,
+  ``facebook_pages``), and the API answers 422 for either without any.
+  Facebook has no organic hashtag feed. Meta ads match keywords, so a monitor with
   ``meta_ads`` needs a keyword query (a brand, product or short phrase); a
   sentence finds nothing.
 """
@@ -93,12 +102,13 @@ MONITOR_RUN_ENDED_STATUSES = frozenset({"completed", "failed", "cancelled"})
 MONITOR_WEB_COUNTS = (10, 15, 20)
 MONITOR_TIKTOK_COUNTS = (10, 20, 30)
 MONITOR_META_ADS_COUNTS = (10, 20, 30)
-# Watched accounts per source. The API cleans the names (``@OpenAI`` or an x.com URL
-# becomes ``OpenAI``, ``r/LocalLLaMA`` becomes ``LocalLLaMA``, a Facebook
-# ``profile.php?id=`` URL becomes the page ID) and answers 422 for a name it cannot
-# read, so they are sent as given. It also answers 422 for instagram or facebook in
-# ``sources`` without accounts; on update it checks the monitor as patched, which only
-# it knows, so that is left to the API too.
+# Watched accounts and hashtags per source. The API cleans the names (``@OpenAI`` or
+# an x.com URL becomes ``OpenAI``, ``r/LocalLLaMA`` becomes ``LocalLLaMA``, a Facebook
+# ``profile.php?id=`` URL becomes the page ID, ``#ავერსი`` or a tag URL becomes the
+# tag) and answers 422 for one it cannot read, so they are sent as given. It also
+# answers 422 for instagram in ``sources`` without accounts or hashtags, or facebook
+# without pages; on update it checks the monitor as patched, which only it knows, so
+# that is left to the API too.
 MONITOR_ACCOUNTS_MAX = 10
 MONITOR_QUERY_MAX = 500
 MONITOR_NAME_MAX = 120
@@ -266,11 +276,11 @@ def monitor_settings(
     )
 
 
-def _check_accounts(name: str, accounts: Optional[List[str]]) -> None:
+def _check_accounts(name: str, accounts: Optional[List[str]], noun: str = "accounts") -> None:
     if accounts is None:
         return
     if len(accounts) > MONITOR_ACCOUNTS_MAX:
-        raise ValueError(f"{name} can list at most {MONITOR_ACCOUNTS_MAX} accounts.")
+        raise ValueError(f"{name} can list at most {MONITOR_ACCOUNTS_MAX} {noun}.")
     if any(not isinstance(account, str) or not account.strip() for account in accounts):
         raise ValueError(f"{name} must list non-empty names.")
 
@@ -285,15 +295,18 @@ def monitor_options(
     youtube_channels: Optional[List[str]] = None,
     tiktok_count: Optional[int] = None,
     tiktok_accounts: Optional[List[str]] = None,
+    tiktok_hashtags: Optional[List[str]] = None,
     threads_accounts: Optional[List[str]] = None,
     instagram_accounts: Optional[List[str]] = None,
+    instagram_hashtags: Optional[List[str]] = None,
     facebook_pages: Optional[List[str]] = None,
     meta_ads_count: Optional[int] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """The per-source ``options`` object, with only the sources that have a value set.
 
-    An empty account list is kept: on update it stops watching accounts (for
-    instagram and facebook the API then answers 422 while the source is on).
+    An empty account or hashtag list is kept: on update it stops watching them (for
+    instagram and facebook the API then answers 422 while the source has nothing
+    left to watch).
     """
     if web_count is not None and web_count not in MONITOR_WEB_COUNTS:
         raise ValueError(
@@ -317,8 +330,10 @@ def monitor_options(
     _check_accounts("reddit_subreddits", reddit_subreddits)
     _check_accounts("youtube_channels", youtube_channels)
     _check_accounts("tiktok_accounts", tiktok_accounts)
+    _check_accounts("tiktok_hashtags", tiktok_hashtags, "hashtags")
     _check_accounts("threads_accounts", threads_accounts)
     _check_accounts("instagram_accounts", instagram_accounts)
+    _check_accounts("instagram_hashtags", instagram_hashtags, "hashtags")
     _check_accounts("facebook_pages", facebook_pages)
     options = {
         "web": _drop_none({"count": web_count}),
@@ -327,9 +342,13 @@ def monitor_options(
         ),
         "reddit": _drop_none({"subreddits": reddit_subreddits}),
         "youtube": _drop_none({"channels": youtube_channels}),
-        "tiktok": _drop_none({"count": tiktok_count, "accounts": tiktok_accounts}),
+        "tiktok": _drop_none(
+            {"count": tiktok_count, "accounts": tiktok_accounts, "hashtags": tiktok_hashtags}
+        ),
         "threads": _drop_none({"accounts": threads_accounts}),
-        "instagram": _drop_none({"accounts": instagram_accounts}),
+        "instagram": _drop_none(
+            {"accounts": instagram_accounts, "hashtags": instagram_hashtags}
+        ),
         "facebook": _drop_none({"pages": facebook_pages}),
         "meta_ads": _drop_none({"count": meta_ads_count}),
     }
@@ -370,8 +389,10 @@ def monitor_create_body(
     youtube_channels: Optional[List[str]] = None,
     tiktok_count: Optional[int] = None,
     tiktok_accounts: Optional[List[str]] = None,
+    tiktok_hashtags: Optional[List[str]] = None,
     threads_accounts: Optional[List[str]] = None,
     instagram_accounts: Optional[List[str]] = None,
+    instagram_hashtags: Optional[List[str]] = None,
     facebook_pages: Optional[List[str]] = None,
     meta_ads_count: Optional[int] = None,
     webhook_url: Optional[str] = None,
@@ -397,8 +418,10 @@ def monitor_create_body(
         youtube_channels,
         tiktok_count,
         tiktok_accounts,
+        tiktok_hashtags,
         threads_accounts,
         instagram_accounts,
+        instagram_hashtags,
         facebook_pages,
         meta_ads_count,
     )
@@ -424,14 +447,16 @@ def monitor_estimate_body(
     youtube_channels: Optional[List[str]] = None,
     tiktok_count: Optional[int] = None,
     tiktok_accounts: Optional[List[str]] = None,
+    tiktok_hashtags: Optional[List[str]] = None,
     threads_accounts: Optional[List[str]] = None,
     instagram_accounts: Optional[List[str]] = None,
+    instagram_hashtags: Optional[List[str]] = None,
     facebook_pages: Optional[List[str]] = None,
     meta_ads_count: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Body of ``POST /desearch/monitors/estimate``. Watched accounts change the price.
+    """Body of ``POST /desearch/monitors/estimate``. Watched accounts and hashtags change the price.
 
-    The estimate does not require accounts for instagram or facebook (it prices one).
+    The estimate does not require accounts or hashtags for instagram or facebook (it prices one).
     """
     body = monitor_settings(sources=sources, interval=interval, summary=summary)
     options = monitor_options(
@@ -444,8 +469,10 @@ def monitor_estimate_body(
         youtube_channels,
         tiktok_count,
         tiktok_accounts,
+        tiktok_hashtags,
         threads_accounts,
         instagram_accounts,
+        instagram_hashtags,
         facebook_pages,
         meta_ads_count,
     )
@@ -702,8 +729,9 @@ def _merged_options(
 ) -> Dict[str, Any]:
     """The monitor's options with ``changes`` applied: PATCH replaces the whole object.
 
-    Each changed field replaces the current one, so a new account list replaces the
-    watched accounts of that source; every other field and source is kept.
+    Each changed field replaces the current one, so a new account or hashtag list
+    replaces the watched accounts or hashtags of that source; every other field and
+    source is kept.
     """
     merged: Dict[str, Any] = {}
     for source, values in _obj(current).items():

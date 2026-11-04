@@ -87,6 +87,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `reactions`, `comments`, `shares`; Meta ads `page`, `active`, `cta`, `link`,
     `platforms`, `thumbnail`, with the headline as `title` and `url` the Ad
     Library record; YouTube `thumbnail`; and `signals.criteria`.
+- Watched hashtags on TikTok and Instagram: `tiktok_hashtags` and
+  `instagram_hashtags` (up to 10 each, any script: `aversi`, `#ავერსი` or a tag
+  URL) on create, estimate and update, sent as `options.tiktok.hashtags` and
+  `options.instagram.hashtags`. A hashtag feed lists posts from any account, so
+  a monitor finds posts outside the accounts it watches; `instagram` needs
+  accounts or hashtags. Update merges them like accounts (`[]` stops
+  watching). The descriptions give the prices (a TikTok hashtag `tiktok_count`
+  posts at $0.00207, an Instagram hashtag $0.02484), `data.hashtag`,
+  `stats.sources.<source>.hashtags_failed`, `stats.screen` (`ai` or
+  `keyword`) and the TikTok, Instagram and Facebook post fields (`post_id`,
+  `type`, `hashtags`, `mentions`, `media`, TikTok `saves`, Facebook `views`).
 - A monitor's `webhook` passes `last_delivery` through: the newest delivery
   (`event`, `status` `pending`/`delivered`/`failed`, `attempts`,
   `status_code`, `error`, `created_at`, `next_attempt_at`, `delivered_at`), or

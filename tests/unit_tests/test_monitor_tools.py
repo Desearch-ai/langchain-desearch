@@ -640,7 +640,7 @@ def test_monitor_runs_waits_for_a_run_and_returns_its_items(monitor_api):
         "sources": {"x": {"fetched": 20, "in_window": 18, "new": 7, "passed": 1, "error": None}},
         "screened": 7,
         "passed": 1,
-        "screen": "jev",
+        "screen": "ai",
     }
     monitor_api.add("GET", RUN_PATH, 200, _run("queued"))
     monitor_api.add("GET", RUN_PATH, 200, _run("running"))
@@ -922,7 +922,7 @@ def test_monitor_tiktok_items_keep_their_account_and_stats_keep_failed_accounts(
         },
         "screened": 4,
         "passed": 1,
-        "screen": "jev",
+        "screen": "ai",
     }
     monitor_api.add(
         "GET", f"{MONITOR_PATH}/items", 200, {"items": [tiktok_item], "next_cursor": None}
@@ -942,6 +942,133 @@ def test_monitor_tiktok_items_keep_their_account_and_stats_keep_failed_accounts(
     assert items["items"][0]["data"] == tiktok_item["data"]
     assert run["stats"]["sources"]["tiktok"]["accounts_failed"] == ["gone_account"]
     assert run["items"][0]["data"]["account"] == "openai"
+
+
+def test_monitor_create_watches_hashtags_and_sends_them_as_given(monitor_api):
+    cleaned = {
+        "tiktok": {"count": 10, "accounts": ["openai"], "hashtags": ["ავერსი", "aversi"]},
+        "instagram": {"hashtags": ["aversi", "ავერსი"]},
+    }
+    monitor_api.add(
+        "POST",
+        "/desearch/monitors",
+        201,
+        _monitor(sources=["tiktok", "instagram"], options=cleaned, webhook=None),
+    )
+
+    result = MonitorCreateTool(base_url=monitor_api.base_url).invoke(
+        {
+            "query": "Aversi pharmacies",
+            "sources": ["tiktok", "instagram"],
+            "min_score": 0,
+            "tiktok_accounts": ["@openai"],
+            "tiktok_hashtags": ["#ავერსი", "https://www.tiktok.com/tag/aversi"],
+            # Instagram may watch hashtags without accounts.
+            "instagram_hashtags": ["https://www.instagram.com/explore/tags/aversi/", "ავერსი"],
+        }
+    )
+
+    (call,) = monitor_api.calls("POST", "/desearch/monitors")
+    assert call["json"]["options"] == {
+        "tiktok": {
+            "accounts": ["@openai"],
+            "hashtags": ["#ავერსი", "https://www.tiktok.com/tag/aversi"],
+        },
+        "instagram": {"hashtags": ["https://www.instagram.com/explore/tags/aversi/", "ავერსი"]},
+    }
+    assert result["options"] == cleaned
+
+
+def test_monitor_update_and_estimate_send_hashtags(monitor_api):
+    current = {"tiktok": {"count": 10, "accounts": ["openai"], "hashtags": ["aversi"]}}
+    monitor_api.add("GET", MONITOR_PATH, 200, _monitor(sources=["tiktok"], options=current))
+    monitor_api.add("PATCH", MONITOR_PATH, 200, _monitor(sources=["tiktok"], options=current))
+    monitor_api.add(
+        "POST",
+        "/desearch/monitors/estimate",
+        200,
+        {"max_run_cost_usd": 0.01, "runs_per_month": 30, "max_monthly_cost_usd": 0.3, "breakdown": {}},
+    )
+
+    MonitorUpdateTool(base_url=monitor_api.base_url).invoke(
+        {"monitor_id": MONITOR_ID, "tiktok_hashtags": []}
+    )
+    MonitorEstimateTool(base_url=monitor_api.base_url).invoke(
+        {"sources": ["instagram"], "instagram_hashtags": ["aversi", "ავერსი"]}
+    )
+
+    (patch,) = monitor_api.calls("PATCH")
+    # [] stops watching hashtags; the accounts and count are kept.
+    assert patch["json"] == {
+        "options": {"tiktok": {"count": 10, "accounts": ["openai"], "hashtags": []}}
+    }
+    (estimate,) = monitor_api.calls("POST", "/desearch/monitors/estimate")
+    assert estimate["json"] == {
+        "sources": ["instagram"],
+        "options": {"instagram": {"hashtags": ["aversi", "ავერსი"]}},
+    }
+
+
+def test_monitor_hashtag_items_keep_the_post_fields_and_stats_keep_failed_hashtags(monitor_api):
+    tiktok_item = {
+        **ITEM,
+        "item_id": "1901",
+        "source": "tiktok",
+        "url": "https://www.tiktok.com/@someone/video/7570000000000000001",
+        "data": {
+            "hashtag": "aversi",
+            "post_id": "7570000000000000001",
+            "type": "video",
+            "views": 3400,
+            "saves": 14,
+            "hashtags": ["aversi", "pharmacy"],
+            "mentions": ["aversipharma"],
+            "media": ["https://v16.tiktokcdn.com/video.mp4"],
+        },
+    }
+    stats = {
+        "sources": {
+            "instagram": {
+                "fetched": 12,
+                "in_window": 3,
+                "new": 3,
+                "passed": 0,
+                "error": None,
+                "hashtags_failed": ["gone_tag"],
+            }
+        },
+        "screened": 3,
+        "passed": 1,
+        "screen": "ai",
+    }
+    monitor_api.add(
+        "GET", RUN_PATH, 200, _run("completed", item_count=1, stats=stats, items=[tiktok_item])
+    )
+
+    run = MonitorRunsTool(base_url=monitor_api.base_url).invoke(
+        {"monitor_id": MONITOR_ID, "run_id": RUN_ID}
+    )
+
+    assert run["stats"]["sources"]["instagram"]["hashtags_failed"] == ["gone_tag"]
+    assert run["stats"]["screen"] == "ai"
+    assert run["items"][0]["data"] == tiktok_item["data"]
+
+
+def test_monitor_tool_descriptions_cover_hashtags_and_post_fields():
+    create = MonitorCreateTool().description
+    assert "tiktok_hashtags" in create and "instagram_hashtags" in create
+    assert "AI classifier" in create
+    fields = MonitorCreateToolInput.model_json_schema()["properties"]
+    assert "from any account" in fields["tiktok_hashtags"]["description"]
+    assert "$0.02484 per hashtag" in fields["instagram_hashtags"]["description"]
+    assert fields["tiktok_hashtags"]["anyOf"][0]["maxItems"] == 10
+    items = MonitorItemsTool().description
+    for text in ("post_id", "saves", "mentions", "media", "hashtag, for one"):
+        assert text in items, text
+    runs = MonitorRunsTool().description
+    assert "hashtags_failed" in runs and "stats.screen: ai" in runs
+    assert "hashtags" in MonitorUpdateTool().description
+    assert "hashtags" in MonitorEstimateTool().description
 
 
 def test_monitor_tool_descriptions_cover_accounts_and_tiktok():
@@ -1017,7 +1144,8 @@ def test_monitor_create_watches_instagram_facebook_threads_and_searches_meta_ads
     [
         (
             "instagram",
-            "Instagram watches accounts: add at least one in options.instagram.accounts",
+            "Instagram watches accounts or hashtags: add at least one in "
+            "options.instagram.accounts or options.instagram.hashtags",
         ),
         ("facebook", "Facebook watches pages: add at least one in options.facebook.pages"),
     ],
@@ -1255,7 +1383,7 @@ def test_monitor_tool_descriptions_cover_the_social_sources():
         assert text in create, text
     fields = MonitorCreateToolInput.model_json_schema()["properties"]
     assert "instagram" in fields["sources"]["description"]
-    assert "required while the source is on" in fields["instagram_accounts"]["description"]
+    assert "instagram_hashtags, and needs one of them" in fields["instagram_accounts"]["description"]
     assert "$0.02484 per account" in fields["instagram_accounts"]["description"]
     assert "$0.0207 per page" in fields["facebook_pages"]["description"]
     assert "profile.php?id=" in fields["facebook_pages"]["description"]
