@@ -3086,11 +3086,11 @@ _MONITOR_HASHTAGS_NOTE = (
     "data.hashtag."
 )
 _MONITOR_TIKTOK_HASHTAGS_DESCRIPTION = (
-    "TikTok hashtags to watch: 'aversi', '#ავერსი' or a tiktok.com/tag/... URL; "
+    "TikTok hashtags to watch: 'skincare', '#სილამაზე' or a tiktok.com/tag/... URL; "
     f"tiktok_count posts per hashtag per run at $0.00207 each. {_MONITOR_HASHTAGS_NOTE}"
 )
 _MONITOR_INSTAGRAM_HASHTAGS_DESCRIPTION = (
-    "Instagram hashtags to watch with the instagram source: 'aversi', '#ავერსი' or an "
+    "Instagram hashtags to watch with the instagram source: 'skincare', '#სილამაზე' or an "
     "instagram.com/explore/tags/... URL; up to 12 posts per hashtag per run, $0.02484 per "
     f"hashtag. The instagram source needs these or instagram_accounts. {_MONITOR_HASHTAGS_NOTE}"
 )

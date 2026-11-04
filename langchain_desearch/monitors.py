@@ -36,7 +36,7 @@ tools to the SDK methods once desearch-py 1.13.0 is published.
   hashtag (``tiktok_hashtags``). Threads search
   returns loosely matched posts, so ``threads_accounts`` work better there too.
 - TikTok and Instagram can watch up to 10 hashtags each (``tiktok_hashtags``,
-  ``instagram_hashtags``; any script, ``aversi``, ``#ავერსი`` or a tag URL). A
+  ``instagram_hashtags``; any script, ``skincare``, ``#სილამაზე`` or a tag URL). A
   hashtag feed lists posts from any account, so a monitor finds posts outside
   the accounts it watches. Items read from a hashtag have ``data.hashtag``, and a
   run lists hashtags it could not read in
@@ -104,7 +104,7 @@ MONITOR_TIKTOK_COUNTS = (10, 20, 30)
 MONITOR_META_ADS_COUNTS = (10, 20, 30)
 # Watched accounts and hashtags per source. The API cleans the names (``@OpenAI`` or
 # an x.com URL becomes ``OpenAI``, ``r/LocalLLaMA`` becomes ``LocalLLaMA``, a Facebook
-# ``profile.php?id=`` URL becomes the page ID, ``#ავერსი`` or a tag URL becomes the
+# ``profile.php?id=`` URL becomes the page ID, ``#სილამაზე`` or a tag URL becomes the
 # tag) and answers 422 for one it cannot read, so they are sent as given. It also
 # answers 422 for instagram in ``sources`` without accounts or hashtags, or facebook
 # without pages; on update it checks the monitor as patched, which only it knows, so

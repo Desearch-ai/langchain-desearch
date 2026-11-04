@@ -163,7 +163,7 @@ The `monitor_tools` group contains the Monitors tools. A monitor reruns `query` 
 
 A source can also watch up to 10 accounts instead of searching: `x_accounts` (`OpenAI`, `@OpenAI` or an x.com URL), `reddit_subreddits` (`LocalLLaMA`, `r/LocalLLaMA` or a URL), `youtube_channels` (`@handle`, a `UC…` channel ID or a URL), `tiktok_accounts` (`openai`, `@openai` or a URL) and `threads_accounts` (`zuck`, `@zuck` or a URL). Each run then reads every account's newest posts, and `query` and `criteria` still decide what is kept; `min_score: 0` keeps every new post. With X accounts, `x_count` is not used (a timeline page is 20 posts) and `x_lang` and `x_min_likes` still filter. `tiktok_count` (10, 20 or 30, default 10) is per account. The tools send names as given; the API cleans them, returns them cleaned (`OpenAI`, `LocalLLaMA`, `@OpenAI` or `UC…`, `openai`, `zuck`) and answers 422 for a name it cannot read (an X username is at most 15 characters). An account that cannot be read in a run is listed in that run's `stats.sources.<source>.accounts_failed`.
 
-TikTok and Instagram can also watch up to 10 hashtags each: `tiktok_hashtags` and `instagram_hashtags`, in any script (`aversi`, `#ავერსი`, or a tag URL such as `https://www.tiktok.com/tag/aversi` or `https://www.instagram.com/explore/tags/aversi/`). A hashtag feed lists popular as well as recent posts from any account, so a monitor finds posts outside the accounts it watches; with accounts or hashtags, a source reads those feeds instead of searching by keyword. Each run reads `tiktok_count` posts per TikTok hashtag and up to 12 per Instagram hashtag. The API returns hashtags without `#` and answers 422 for one it cannot read. An item read from a hashtag has `data.hashtag`, and a hashtag that cannot be read is listed in the run's `stats.sources.<source>.hashtags_failed`. Facebook has no organic hashtag feed; for ads by keyword use `meta_ads`.
+TikTok and Instagram can also watch up to 10 hashtags each: `tiktok_hashtags` and `instagram_hashtags`, in any script (`skincare`, `#სილამაზე`, or a tag URL such as `https://www.tiktok.com/tag/skincare` or `https://www.instagram.com/explore/tags/skincare/`). A hashtag feed lists popular as well as recent posts from any account, so a monitor finds posts outside the accounts it watches; with accounts or hashtags, a source reads those feeds instead of searching by keyword. Each run reads `tiktok_count` posts per TikTok hashtag and up to 12 per Instagram hashtag. The API returns hashtags without `#` and answers 422 for one it cannot read. An item read from a hashtag has `data.hashtag`, and a hashtag that cannot be read is listed in the run's `stats.sources.<source>.hashtags_failed`. Facebook has no organic hashtag feed; for ads by keyword use `meta_ads`.
 
 TikTok search has no working date filter and ranks by relevance, so a TikTok keyword monitor finds a new video only when it reaches TikTok's top results. To follow creators or a tag, watch their accounts (`tiktok_accounts`) or the hashtag (`tiktok_hashtags`). Threads keyword search returns loosely matched posts, so `threads_accounts` work better there too.
 
@@ -467,13 +467,13 @@ watch = MonitorCreateTool().invoke({
 
 # Watch hashtags (any script): posts from any account. Instagram needs no accounts.
 tags = MonitorCreateTool().invoke({
-    "query": "Aversi pharmacies: promotions, reviews and complaints",
+    "query": "Posts about our skincare brand",
     "sources": ["tiktok", "instagram"],
-    "tiktok_hashtags": ["#ავერსი", "https://www.tiktok.com/tag/aversi"],
-    "instagram_hashtags": ["aversi", "ავერსი"],
+    "tiktok_hashtags": ["#სილამაზე", "https://www.tiktok.com/tag/skincare"],
+    "instagram_hashtags": ["skincare", "სილამაზე"],
     "min_score": 0,
 })
-print(tags["options"]["tiktok"]["hashtags"])  # ['ავერსი', 'aversi']
+print(tags["options"]["tiktok"]["hashtags"])  # ['სილამაზე', 'skincare']
 
 # Instagram and Facebook read only watched accounts; Meta ads match a keyword query.
 brand = MonitorCreateTool().invoke({

@@ -946,8 +946,8 @@ def test_monitor_tiktok_items_keep_their_account_and_stats_keep_failed_accounts(
 
 def test_monitor_create_watches_hashtags_and_sends_them_as_given(monitor_api):
     cleaned = {
-        "tiktok": {"count": 10, "accounts": ["openai"], "hashtags": ["ავერსი", "aversi"]},
-        "instagram": {"hashtags": ["aversi", "ავერსი"]},
+        "tiktok": {"count": 10, "accounts": ["openai"], "hashtags": ["სილამაზე", "skincare"]},
+        "instagram": {"hashtags": ["skincare", "სილამაზე"]},
     }
     monitor_api.add(
         "POST",
@@ -958,13 +958,13 @@ def test_monitor_create_watches_hashtags_and_sends_them_as_given(monitor_api):
 
     result = MonitorCreateTool(base_url=monitor_api.base_url).invoke(
         {
-            "query": "Aversi pharmacies",
+            "query": "Posts about our skincare brand",
             "sources": ["tiktok", "instagram"],
             "min_score": 0,
             "tiktok_accounts": ["@openai"],
-            "tiktok_hashtags": ["#ავერსი", "https://www.tiktok.com/tag/aversi"],
+            "tiktok_hashtags": ["#სილამაზე", "https://www.tiktok.com/tag/skincare"],
             # Instagram may watch hashtags without accounts.
-            "instagram_hashtags": ["https://www.instagram.com/explore/tags/aversi/", "ავერსი"],
+            "instagram_hashtags": ["https://www.instagram.com/explore/tags/skincare/", "სილამაზე"],
         }
     )
 
@@ -972,15 +972,15 @@ def test_monitor_create_watches_hashtags_and_sends_them_as_given(monitor_api):
     assert call["json"]["options"] == {
         "tiktok": {
             "accounts": ["@openai"],
-            "hashtags": ["#ავერსი", "https://www.tiktok.com/tag/aversi"],
+            "hashtags": ["#სილამაზე", "https://www.tiktok.com/tag/skincare"],
         },
-        "instagram": {"hashtags": ["https://www.instagram.com/explore/tags/aversi/", "ავერსი"]},
+        "instagram": {"hashtags": ["https://www.instagram.com/explore/tags/skincare/", "სილამაზე"]},
     }
     assert result["options"] == cleaned
 
 
 def test_monitor_update_and_estimate_send_hashtags(monitor_api):
-    current = {"tiktok": {"count": 10, "accounts": ["openai"], "hashtags": ["aversi"]}}
+    current = {"tiktok": {"count": 10, "accounts": ["openai"], "hashtags": ["skincare"]}}
     monitor_api.add("GET", MONITOR_PATH, 200, _monitor(sources=["tiktok"], options=current))
     monitor_api.add("PATCH", MONITOR_PATH, 200, _monitor(sources=["tiktok"], options=current))
     monitor_api.add(
@@ -994,7 +994,7 @@ def test_monitor_update_and_estimate_send_hashtags(monitor_api):
         {"monitor_id": MONITOR_ID, "tiktok_hashtags": []}
     )
     MonitorEstimateTool(base_url=monitor_api.base_url).invoke(
-        {"sources": ["instagram"], "instagram_hashtags": ["aversi", "ავერსი"]}
+        {"sources": ["instagram"], "instagram_hashtags": ["skincare", "სილამაზე"]}
     )
 
     (patch,) = monitor_api.calls("PATCH")
@@ -1005,7 +1005,7 @@ def test_monitor_update_and_estimate_send_hashtags(monitor_api):
     (estimate,) = monitor_api.calls("POST", "/desearch/monitors/estimate")
     assert estimate["json"] == {
         "sources": ["instagram"],
-        "options": {"instagram": {"hashtags": ["aversi", "ავერსი"]}},
+        "options": {"instagram": {"hashtags": ["skincare", "სილამაზე"]}},
     }
 
 
@@ -1016,13 +1016,13 @@ def test_monitor_hashtag_items_keep_the_post_fields_and_stats_keep_failed_hashta
         "source": "tiktok",
         "url": "https://www.tiktok.com/@someone/video/7570000000000000001",
         "data": {
-            "hashtag": "aversi",
+            "hashtag": "skincare",
             "post_id": "7570000000000000001",
             "type": "video",
             "views": 3400,
             "saves": 14,
-            "hashtags": ["aversi", "pharmacy"],
-            "mentions": ["aversipharma"],
+            "hashtags": ["skincare", "serum"],
+            "mentions": ["skincarebrand"],
             "media": ["https://v16.tiktokcdn.com/video.mp4"],
         },
     }

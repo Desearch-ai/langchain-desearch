@@ -88,7 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `platforms`, `thumbnail`, with the headline as `title` and `url` the Ad
     Library record; YouTube `thumbnail`; and `signals.criteria`.
 - Watched hashtags on TikTok and Instagram: `tiktok_hashtags` and
-  `instagram_hashtags` (up to 10 each, any script: `aversi`, `#ავერსი` or a tag
+  `instagram_hashtags` (up to 10 each, any script: `skincare`, `#სილამაზე` or a tag
   URL) on create, estimate and update, sent as `options.tiktok.hashtags` and
   `options.instagram.hashtags`. A hashtag feed lists posts from any account, so
   a monitor finds posts outside the accounts it watches; `instagram` needs
