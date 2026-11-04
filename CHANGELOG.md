@@ -7,11 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.5.0] - unreleased
 
-> **Do not publish 1.5.0 before the Monitors API (with its TikTok source and
-> watched accounts) is on production.** The tools call the Monitors routes
-> over HTTP (`monitors.py`), so this release needs no new desearch-py; it keeps
-> `desearch-py>=1.11.0,<2.0.0`, which must be on PyPI first (see 1.3.0). The
-> version assumes #7 (1.4.0) lands first; if this lands first, it can be 1.4.0.
+> **Do not publish 1.5.0 before the Monitors API (with its TikTok, Instagram,
+> Facebook and Meta ads sources, watched accounts and webhook delivery status,
+> desearch-public-api#635 and #644) is on production.** The tools call the
+> Monitors routes over HTTP (`monitors.py`), so this release needs no new
+> desearch-py; it keeps `desearch-py>=1.11.0,<2.0.0`, which must be on PyPI
+> first (see 1.3.0). The version assumes #7 (1.4.0) lands first; if this lands
+> first, it can be 1.4.0.
 
 ### Added
 
@@ -62,6 +64,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has no working date filter and ranks by relevance, so a TikTok keyword
   monitor finds a new video only once it reaches TikTok's top results; to
   follow creators, watch their accounts (`tiktok_accounts`).
+- Instagram, Facebook and Meta ads as Monitors sources (`sources` and the
+  items `source` filter), and Threads watched accounts (desearch-public-api#644):
+  - `instagram_accounts` and `facebook_pages` (1-10 each) on create, estimate
+    and update. Neither platform has a keyword search for posts, so those
+    sources read only watched accounts, and the API answers 422 for either
+    without any: on create, and on update when the monitor as changed would
+    have none (`facebook_pages: []` while `facebook` is a source). The tools
+    leave that check to the API and return its `HTTP 422` error. Facebook
+    `profile.php?id=` and `/pages/Name/123` URLs are cleaned to the page ID.
+  - `meta_ads_count` (10, 20 or 30) for `meta_ads`, the Meta Ad Library by
+    keyword. Descriptions say its query should be a brand, product or short
+    phrase (`ChatGPT`), since a sentence finds nothing, and that an ad is new
+    the first time a run sees it if it started within 30 days.
+  - `threads_accounts` (up to 10): Threads keyword search returns loosely
+    matched posts, so accounts work better.
+  - Prices in the descriptions: a Threads account $0.00207 per run, an
+    Instagram account $0.02484 (up to 12 posts), a Facebook page $0.0207 (up to
+    10 posts), Meta ads $0.0207 per 10 records (30 is $0.0621).
+  - Item `data` per source in the descriptions: Threads `likes`; Instagram
+    `likes`, `comments`, `views`, `media_type`, `thumbnail`; Facebook
+    `reactions`, `comments`, `shares`; Meta ads `page`, `active`, `cta`, `link`,
+    `platforms`, `thumbnail`, with the headline as `title` and `url` the Ad
+    Library record; YouTube `thumbnail`; and `signals.criteria`.
+- A monitor's `webhook` passes `last_delivery` through: the newest delivery
+  (`event`, `status` `pending`/`delivered`/`failed`, `attempts`,
+  `status_code`, `error`, `created_at`, `next_attempt_at`, `delivered_at`), or
+  `null` before the first one. The key is kept when it is `null`, so "nothing
+  delivered yet" reads differently from an API that does not report it.
+- `facebook_tool` `search` takes `sort`: `impressions` (the default, most
+  seen first) or `recent` (recently started ads first). It needs desearch-py
+  1.13.0 or later (desearch.py#41); with an older desearch-py a search with
+  `sort` returns an error saying so, and one without `sort` works as before.
+  Not part of Monitors.
+- `scripts/e2e-monitors.py --with-accounts` also creates a monitor with the
+  new sources (`run_now: false`, no trigger) and checks the cleaned names, a
+  422 for instagram and for facebook without accounts on create and on update,
+  the estimate's breakdown per source, `webhook.last_delivery` null on the new
+  monitor, items by `source` `meta_ads`, and a 16-character X username (a
+  422; X usernames are at most 15). Every monitor it creates is deleted in a
+  `finally`, also when its create check fails.
 
 ## [1.3.0] - unreleased
 

@@ -15,7 +15,12 @@ delivered; the step checks the answer's shape. ``--with-accounts`` also creates
 (and deletes) a monitor with the TikTok source and watched accounts on X,
 Reddit, YouTube and TikTok (desearch-public-api#635): the names come back
 cleaned, a bad name is a 422, and an update keeps the accounts it does not
-change. Also free.
+change. It then creates (and deletes) a monitor with the Instagram, Facebook
+and Meta ads sources and Threads accounts (desearch-public-api#644): the names
+come back cleaned, instagram or facebook without accounts is a 422 on create
+and on update, the estimate prices each source, a fresh webhook has
+``last_delivery`` null, and items can be read by source meta_ads. Also free:
+every monitor is created with ``run_now: false`` and never triggered.
 
 ``--base-url`` points the tools at another deployment, such as
 https://api-dev.desearch.ai, and ``--key-env`` names the variable that holds
@@ -33,7 +38,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # Run from a checkout without installing the package.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -126,6 +131,48 @@ def _has_list(key: str) -> Callable[[Any], Optional[str]]:
         return None
 
     return check
+
+
+def _expect_422(
+    smoke: Smoke, name: str, call: Callable[[], Any], detail: str = ""
+) -> Any:
+    """Run a call whose expected answer is HTTP 422 (``Smoke.run`` counts errors as failures).
+
+    ``detail`` must appear in the error, so a 422 for another field does not pass.
+    """
+    try:
+        result = call()
+    except Exception as exc:  # report and keep going
+        result = f"{type(exc).__name__}: {exc}"
+    if isinstance(result, str) and "HTTP 422" in result and detail in result:
+        print(f"PASS {name}", flush=True)
+        smoke.passed += 1
+    else:
+        # A dict here is a monitor that should not exist; show only its id.
+        shown = (
+            f"no error, monitor_id={result.get('monitor_id')!r}"
+            if isinstance(result, dict)
+            else repr(result)
+        )
+        print(f"FAIL {name}: {_one_line(shown, 200)}", flush=True)
+        smoke.failed += 1
+    return result
+
+
+def _recording(call: Callable[[], Any], created: List[str]) -> Callable[[], Any]:
+    """``call``, noting the monitor it creates before any check runs.
+
+    ``Smoke.run`` returns None when a check fails, so the id is kept here to delete
+    the monitor even then.
+    """
+
+    def wrapped() -> Any:
+        result = call()
+        if isinstance(result, dict) and result.get("monitor_id"):
+            created.append(result["monitor_id"])
+        return result
+
+    return wrapped
 
 
 def check_monitors(smoke: Smoke, base_url: str, trigger: bool) -> None:
@@ -294,6 +341,8 @@ def check_monitors(smoke: Smoke, base_url: str, trigger: bool) -> None:
         smoke.failed += 1
 
 
+# X usernames are 1-15 characters; the API answers 422 for a longer one.
+X_USERNAME_MAX = 15
 WATCHED = {
     "x_accounts": ["@OpenAI", "https://x.com/AnthropicAI"],
     "reddit_subreddits": ["r/LocalLLaMA"],
@@ -308,6 +357,7 @@ CLEANED = {
     "tiktok": ["openai"],
 }
 ACCOUNT_FIELDS = {"x": "accounts", "reddit": "subreddits", "youtube": "channels", "tiktok": "accounts"}
+assert all(len(name) <= X_USERNAME_MAX for name in CLEANED["x"]), "X usernames are 1-15 characters"
 
 
 def _watched(result: Any) -> Dict[str, Any]:
@@ -334,13 +384,16 @@ def check_watched_accounts(smoke: Smoke, base_url: str) -> None:
         lambda: estimate.invoke({"sources": sources, **WATCHED}),
         priced_tiktok,
     )
-    bad = estimate.invoke({"sources": ["x"], "x_accounts": ["not a name!"]})
-    if isinstance(bad, str) and "HTTP 422" in bad:
-        print("PASS monitor_estimate_tool (bad X username is 422)", flush=True)
-        smoke.passed += 1
-    else:
-        print(f"FAIL monitor_estimate_tool (bad X username is 422): {_one_line(repr(bad), 200)}", flush=True)
-        smoke.failed += 1
+    _expect_422(
+        smoke,
+        "monitor_estimate_tool (bad X username is 422)",
+        lambda: estimate.invoke({"sources": ["x"], "x_accounts": ["not a name!"]}),
+    )
+    _expect_422(
+        smoke,
+        f"monitor_estimate_tool ({X_USERNAME_MAX + 1}-character X username is 422)",
+        lambda: estimate.invoke({"sources": ["x"], "x_accounts": ["a" * (X_USERNAME_MAX + 1)]}),
+    )
 
     def cleaned(result: Any) -> Optional[str]:
         if result.get("sources") != sources:
@@ -349,26 +402,31 @@ def check_watched_accounts(smoke: Smoke, base_url: str) -> None:
             return f"names={_watched(result)!r}"
         return None
 
+    made: List[str] = []
     created = smoke.run(
         "monitor_create_tool (tiktok + watched accounts)",
-        lambda: create.invoke(
-            {
-                "query": "OpenAI announcements",
-                "name": f"langchain e2e accounts {int(time.time())}",
-                "sources": sources,
-                "interval": "7d",
-                "min_score": 0,
-                "run_now": False,
-                **WATCHED,
-            }
+        _recording(
+            lambda: create.invoke(
+                {
+                    "query": "OpenAI announcements",
+                    "name": f"langchain e2e accounts {int(time.time())}",
+                    "sources": sources,
+                    "interval": "7d",
+                    "min_score": 0,
+                    "run_now": False,
+                    **WATCHED,
+                }
+            ),
+            made,
         ),
         cleaned,
     )
-    if not created:
-        smoke.skip("the remaining watched-accounts steps", "the monitor was not created")
-        return
-    monitor_id = created["monitor_id"]
     try:
+        if not created:
+            why = "its create check failed" if made else "the monitor was not created"
+            smoke.skip("the remaining watched-accounts steps", why)
+            return
+        monitor_id = created["monitor_id"]
 
         def kept(result: Any) -> Optional[str]:
             tiktok = (result.get("options") or {}).get("tiktok")
@@ -387,11 +445,167 @@ def check_watched_accounts(smoke: Smoke, base_url: str) -> None:
             _has_list("items"),
         )
     finally:
+        for made_id in made:
+            smoke.run(
+                "monitor_control_tool delete (accounts)",
+                lambda made_id=made_id: control.invoke({"monitor_id": made_id, "action": "delete"}),
+                _expect(monitor_id=made_id, deleted=True),
+            )
+
+
+# Instagram and Facebook read only watched accounts; Meta ads search the Ad Library by
+# keyword, so the query is a brand rather than a sentence.
+SOCIAL_SOURCES = ["instagram", "facebook", "meta_ads", "threads"]
+SOCIAL = {
+    "instagram_accounts": ["@openai", "https://www.instagram.com/nasa/"],
+    "facebook_pages": [
+        "https://www.facebook.com/NASA",
+        "https://www.facebook.com/profile.php?id=100064869009429",
+    ],
+    "threads_accounts": ["@zuck"],
+    "meta_ads_count": 20,
+}
+SOCIAL_CLEANED = {
+    "instagram": {"accounts": ["openai", "nasa"]},
+    "facebook": {"pages": ["NASA", "100064869009429"]},
+    "meta_ads": {"count": 20},
+    "threads": {"accounts": ["zuck"]},
+}
+# Most a run of SOCIAL can cost per source (desearch-public-api#644): an Instagram account
+# $0.02484, a Facebook page $0.0207, Meta ads $0.00207 per record, a Threads account
+# $0.00207.
+SOCIAL_PRICES = {
+    "instagram": 2 * 0.02484,
+    "facebook": 2 * 0.0207,
+    "meta_ads": 20 * 0.00207,
+    "threads": 0.00207,
+}
+ACCOUNT_DETAIL = {"instagram": "options.instagram.accounts", "facebook": "options.facebook.pages"}
+
+
+def _social_options(result: Any) -> Dict[str, Any]:
+    options = result.get("options") or {}
+    return {source: options.get(source) for source in SOCIAL_CLEANED}
+
+
+def _no_delivery_yet(result: Any) -> Optional[str]:
+    webhook = result.get("webhook") or {}
+    if not webhook.get("url"):
+        return f"webhook={webhook!r}"
+    if "last_delivery" not in webhook:
+        return "webhook.last_delivery is missing"
+    if webhook["last_delivery"] is not None:
+        return f"last_delivery={webhook['last_delivery']!r}, expected null"
+    return None
+
+
+def check_social_sources(smoke: Smoke, base_url: str) -> None:
+    create = MonitorCreateTool(base_url=base_url)
+    estimate = MonitorEstimateTool(base_url=base_url)
+    monitors = MonitorsTool(base_url=base_url)
+    update = MonitorUpdateTool(base_url=base_url)
+    control = MonitorControlTool(base_url=base_url)
+    items = MonitorItemsTool(base_url=base_url)
+    # Every monitor this creates, deleted at the end, also one a 422 check should not have made.
+    created: List[str] = []
+
+    def priced(result: Any) -> Optional[str]:
+        breakdown = result.get("breakdown") if isinstance(result, dict) else None
+        if not isinstance(breakdown, dict) or "screening" not in breakdown:
+            return f"breakdown={breakdown!r}"
+        for source, price in SOCIAL_PRICES.items():
+            value = breakdown.get(source)
+            if not isinstance(value, (int, float)) or abs(value - price) > 1e-6:
+                return f"breakdown[{source!r}]={value!r}, expected {price:.6f}"
+        return None
+
+    try:
         smoke.run(
-            "monitor_control_tool delete (accounts)",
-            lambda: control.invoke({"monitor_id": monitor_id, "action": "delete"}),
-            _expect(monitor_id=monitor_id, deleted=True),
+            "monitor_estimate_tool (instagram, facebook, meta_ads, threads accounts)",
+            lambda: estimate.invoke({"sources": SOCIAL_SOURCES, **SOCIAL}),
+            priced,
         )
+        for source, detail in ACCOUNT_DETAIL.items():
+            _expect_422(
+                smoke,
+                f"monitor_create_tool ({source} without accounts is 422)",
+                _recording(
+                    lambda source=source: create.invoke(
+                        {"query": "NASA launches", "sources": [source], "run_now": False}
+                    ),
+                    created,
+                ),
+                detail,
+            )
+
+        def cleaned(result: Any) -> Optional[str]:
+            if result.get("sources") != SOCIAL_SOURCES:
+                return f"sources={result.get('sources')!r}"
+            if _social_options(result) != SOCIAL_CLEANED:
+                return f"options={_social_options(result)!r}"
+            return _no_delivery_yet(result)
+
+        before = len(created)
+        monitor = smoke.run(
+            "monitor_create_tool (instagram, facebook, meta_ads, threads accounts)",
+            _recording(
+                lambda: create.invoke(
+                    {
+                        "query": "ChatGPT",
+                        "name": f"langchain e2e social {int(time.time())}",
+                        "sources": SOCIAL_SOURCES,
+                        "interval": "7d",
+                        "webhook_url": WEBHOOK_URL,
+                        "run_now": False,
+                        **SOCIAL,
+                    }
+                ),
+                created,
+            ),
+            cleaned,
+        )
+        if not monitor:
+            why = "its create check failed" if len(created) > before else "the monitor was not created"
+            smoke.skip("the remaining social-source steps", why)
+            return
+        monitor_id = monitor["monitor_id"]
+        smoke.run(
+            "monitors_tool (webhook.last_delivery is null before a delivery)",
+            lambda: monitors.invoke({"monitor_id": monitor_id}),
+            _no_delivery_yet,
+        )
+        for source, field in (("instagram", "instagram_accounts"), ("facebook", "facebook_pages")):
+            _expect_422(
+                smoke,
+                f"monitor_update_tool ({field}=[] is 422)",
+                lambda field=field: update.invoke({"monitor_id": monitor_id, field: []}),
+                ACCOUNT_DETAIL[source],
+            )
+
+        def kept(result: Any) -> Optional[str]:
+            expected = {**SOCIAL_CLEANED, "meta_ads": {"count": 30}}
+            got = _social_options(result)
+            return None if got == expected else f"options={got!r}"
+
+        smoke.run(
+            "monitor_update_tool (meta_ads_count keeps every account)",
+            lambda: update.invoke({"monitor_id": monitor_id, "meta_ads_count": 30}),
+            kept,
+        )
+        smoke.run(
+            "monitor_items_tool (source meta_ads)",
+            lambda: items.invoke({"monitor_id": monitor_id, "source": "meta_ads"}),
+            _has_list("items"),
+        )
+    finally:
+        for monitor_id in created:
+            smoke.run(
+                "monitor_control_tool delete (social sources)",
+                lambda monitor_id=monitor_id: control.invoke(
+                    {"monitor_id": monitor_id, "action": "delete"}
+                ),
+                _expect(monitor_id=monitor_id, deleted=True),
+            )
 
 
 def main() -> int:
@@ -414,7 +628,10 @@ def main() -> int:
     parser.add_argument(
         "--with-accounts",
         action="store_true",
-        help="also check TikTok and watched accounts (needs desearch-public-api#635)",
+        help=(
+            "also check TikTok and watched accounts (desearch-public-api#635), then "
+            "Instagram, Facebook, Meta ads and Threads accounts (#644)"
+        ),
     )
     args = parser.parse_args()
     _load_env_file()
@@ -428,6 +645,7 @@ def main() -> int:
     check_monitors(smoke, args.base_url, args.trigger)
     if args.with_accounts:
         check_watched_accounts(smoke, args.base_url)
+        check_social_sources(smoke, args.base_url)
     print(
         f"{smoke.passed} passed, {smoke.failed} failed, {smoke.skipped} skipped "
         f"on {args.base_url}"

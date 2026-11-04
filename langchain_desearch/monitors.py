@@ -1,7 +1,8 @@
 """Monitors on the Desearch API (``/desearch/monitors/*``).
 
-A monitor reruns a search over the web, X, Reddit, YouTube, Threads and TikTok
-on a schedule (every 1h, 3h, 6h, 12h, 1d or 7d) and keeps only what is new. Each
+A monitor reruns a search over the web, X, Reddit, YouTube, Threads, TikTok and
+the Meta Ad Library, or watches Instagram accounts and Facebook pages, on a
+schedule (every 1h, 3h, 6h, 12h, 1d or 7d) and keeps only what is new. Each
 run searches the window since the previous run ended (or, for a source that
 watches accounts, reads each account's newest posts), drops every item the
 monitor has already seen, screens the rest with Jev (``relevant``, ``new_info`` and one
@@ -24,9 +25,19 @@ tools to the SDK methods once desearch-py 1.13.0 is published.
 - A watched account is one feed call per run at that feed's list price: an X
   timeline (20 posts) is about $0.003, a subreddit or YouTube channel $0.00207,
   a TikTok profile ``tiktok_count`` posts at $0.00207 per post.
+- A Threads account is one request per run ($0.00207). An Instagram account is
+  up to 12 posts at the per-post price ($0.02484 per run) and a Facebook page up
+  to 10 ($0.0207 per run). Meta ads are ``meta_ads_count`` Ad Library records
+  per run: 10 is $0.0207, 30 is $0.0621.
 - TikTok search has no working date filter and ranks by relevance, so a TikTok
   keyword monitor finds a new video only when it reaches TikTok's top results;
-  to follow creators, watch their accounts (``tiktok_accounts``).
+  to follow creators, watch their accounts (``tiktok_accounts``). Threads search
+  returns loosely matched posts, so ``threads_accounts`` work better there too.
+- Instagram and Facebook have no keyword search for posts: those sources read
+  only watched accounts (``instagram_accounts``, ``facebook_pages``), and the API
+  answers 422 for either without any. Meta ads match keywords, so a monitor with
+  ``meta_ads`` needs a keyword query (a brand, product or short phrase); a
+  sentence finds nothing.
 """
 
 import asyncio
@@ -53,7 +64,17 @@ MONITOR_CONTROL_TOOL = "monitor_control_tool"
 MONITOR_RUNS_TOOL = "monitor_runs_tool"
 MONITOR_ITEMS_TOOL = "monitor_items_tool"
 
-MONITOR_SOURCES = ("web", "x", "reddit", "youtube", "threads", "tiktok")
+MONITOR_SOURCES = (
+    "web",
+    "x",
+    "reddit",
+    "youtube",
+    "threads",
+    "tiktok",
+    "instagram",
+    "facebook",
+    "meta_ads",
+)
 MONITOR_INTERVALS = ("1h", "3h", "6h", "12h", "1d", "7d")
 MONITOR_EVENTS = ("monitor.items.found", "monitor.run.completed", "monitor.run.failed")
 MONITOR_STATUSES = ("active", "paused")
@@ -71,9 +92,13 @@ MONITOR_RUN_ENDED_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 MONITOR_WEB_COUNTS = (10, 15, 20)
 MONITOR_TIKTOK_COUNTS = (10, 20, 30)
+MONITOR_META_ADS_COUNTS = (10, 20, 30)
 # Watched accounts per source. The API cleans the names (``@OpenAI`` or an x.com URL
-# becomes ``OpenAI``, ``r/LocalLLaMA`` becomes ``LocalLLaMA``) and answers 422 for a
-# name it cannot read, so they are sent as given.
+# becomes ``OpenAI``, ``r/LocalLLaMA`` becomes ``LocalLLaMA``, a Facebook
+# ``profile.php?id=`` URL becomes the page ID) and answers 422 for a name it cannot
+# read, so they are sent as given. It also answers 422 for instagram or facebook in
+# ``sources`` without accounts; on update it checks the monitor as patched, which only
+# it knows, so that is left to the API too.
 MONITOR_ACCOUNTS_MAX = 10
 MONITOR_QUERY_MAX = 500
 MONITOR_NAME_MAX = 120
@@ -260,10 +285,15 @@ def monitor_options(
     youtube_channels: Optional[List[str]] = None,
     tiktok_count: Optional[int] = None,
     tiktok_accounts: Optional[List[str]] = None,
+    threads_accounts: Optional[List[str]] = None,
+    instagram_accounts: Optional[List[str]] = None,
+    facebook_pages: Optional[List[str]] = None,
+    meta_ads_count: Optional[int] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """The per-source ``options`` object, with only the sources that have a value set.
 
-    An empty account list is kept: on update it stops watching accounts.
+    An empty account list is kept: on update it stops watching accounts (for
+    instagram and facebook the API then answers 422 while the source is on).
     """
     if web_count is not None and web_count not in MONITOR_WEB_COUNTS:
         raise ValueError(
@@ -279,10 +309,17 @@ def monitor_options(
         raise ValueError(
             f"tiktok_count must be one of: {', '.join(map(str, MONITOR_TIKTOK_COUNTS))}."
         )
+    if meta_ads_count is not None and meta_ads_count not in MONITOR_META_ADS_COUNTS:
+        raise ValueError(
+            f"meta_ads_count must be one of: {', '.join(map(str, MONITOR_META_ADS_COUNTS))}."
+        )
     _check_accounts("x_accounts", x_accounts)
     _check_accounts("reddit_subreddits", reddit_subreddits)
     _check_accounts("youtube_channels", youtube_channels)
     _check_accounts("tiktok_accounts", tiktok_accounts)
+    _check_accounts("threads_accounts", threads_accounts)
+    _check_accounts("instagram_accounts", instagram_accounts)
+    _check_accounts("facebook_pages", facebook_pages)
     options = {
         "web": _drop_none({"count": web_count}),
         "x": _drop_none(
@@ -291,6 +328,10 @@ def monitor_options(
         "reddit": _drop_none({"subreddits": reddit_subreddits}),
         "youtube": _drop_none({"channels": youtube_channels}),
         "tiktok": _drop_none({"count": tiktok_count, "accounts": tiktok_accounts}),
+        "threads": _drop_none({"accounts": threads_accounts}),
+        "instagram": _drop_none({"accounts": instagram_accounts}),
+        "facebook": _drop_none({"pages": facebook_pages}),
+        "meta_ads": _drop_none({"count": meta_ads_count}),
     }
     return {source: values for source, values in options.items() if values}
 
@@ -329,6 +370,10 @@ def monitor_create_body(
     youtube_channels: Optional[List[str]] = None,
     tiktok_count: Optional[int] = None,
     tiktok_accounts: Optional[List[str]] = None,
+    threads_accounts: Optional[List[str]] = None,
+    instagram_accounts: Optional[List[str]] = None,
+    facebook_pages: Optional[List[str]] = None,
+    meta_ads_count: Optional[int] = None,
     webhook_url: Optional[str] = None,
     webhook_events: Optional[List[str]] = None,
     metadata: Optional[Dict[str, str]] = None,
@@ -352,6 +397,10 @@ def monitor_create_body(
         youtube_channels,
         tiktok_count,
         tiktok_accounts,
+        threads_accounts,
+        instagram_accounts,
+        facebook_pages,
+        meta_ads_count,
     )
     if options:
         body["options"] = options
@@ -375,8 +424,15 @@ def monitor_estimate_body(
     youtube_channels: Optional[List[str]] = None,
     tiktok_count: Optional[int] = None,
     tiktok_accounts: Optional[List[str]] = None,
+    threads_accounts: Optional[List[str]] = None,
+    instagram_accounts: Optional[List[str]] = None,
+    facebook_pages: Optional[List[str]] = None,
+    meta_ads_count: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Body of ``POST /desearch/monitors/estimate``. Watched accounts change the price."""
+    """Body of ``POST /desearch/monitors/estimate``. Watched accounts change the price.
+
+    The estimate does not require accounts for instagram or facebook (it prices one).
+    """
     body = monitor_settings(sources=sources, interval=interval, summary=summary)
     options = monitor_options(
         web_count,
@@ -388,6 +444,10 @@ def monitor_estimate_body(
         youtube_channels,
         tiktok_count,
         tiktok_accounts,
+        threads_accounts,
+        instagram_accounts,
+        facebook_pages,
+        meta_ads_count,
     )
     if options:
         body["options"] = options
@@ -416,6 +476,25 @@ def _truncated(value: Any, limit: int) -> Optional[str]:
     return text
 
 
+def _compact_webhook(webhook: Dict[str, Any]) -> Dict[str, Any]:
+    """The webhook with its newest delivery (``last_delivery``) as the API returns it.
+
+    ``last_delivery`` is null before the first delivery. It is kept as null, so a
+    reader can tell "nothing delivered yet" from an API that does not report it.
+    """
+    view = _compact(
+        {
+            "url": webhook.get("url"),
+            "events": _list(webhook.get("events")),
+            "consecutive_failures": webhook.get("consecutive_failures"),
+        }
+    )
+    if view and "last_delivery" in webhook:
+        delivery = webhook["last_delivery"]
+        view["last_delivery"] = delivery if isinstance(delivery, dict) else None
+    return view
+
+
 def compact_monitor(monitor: Any) -> Dict[str, Any]:
     """A monitor as an agent needs it: what it watches, when it runs, its state and cost."""
     m = _obj(monitor)
@@ -434,13 +513,7 @@ def compact_monitor(monitor: Any) -> Dict[str, Any]:
             "summary": m.get("summary"),
             "status": m.get("status"),
             "paused_reason": m.get("paused_reason"),
-            "webhook": _compact(
-                {
-                    "url": webhook.get("url"),
-                    "events": _list(webhook.get("events")),
-                    "consecutive_failures": webhook.get("consecutive_failures"),
-                }
-            ),
+            "webhook": _compact_webhook(webhook),
             "webhook_secret": _text(m.get("webhook_secret")),
             "metadata": _obj(m.get("metadata")),
             "max_run_cost_usd": m.get("max_run_cost_usd"),

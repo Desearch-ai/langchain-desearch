@@ -1,12 +1,13 @@
 import asyncio
 import concurrent.futures
+import inspect
 import os
 import re
 from datetime import date
 from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
-from desearch_py import Desearch
+from desearch_py import Desearch, FacebookPost
 from langchain_core.callbacks import (
     AsyncCallbackManagerForToolRun,
     CallbackManagerForToolRun,
@@ -92,9 +93,16 @@ def _run_coroutine(factory: Callable[[], Awaitable[Any]]) -> Any:
         return executor.submit(lambda: asyncio.run(factory())).result()
 
 
+# POST /desearch/facebook/search takes `sort` (desearch-public-api#644); desearch-py's
+# facebook_search takes it from 1.13.0.
+_FACEBOOK_SEARCH_TAKES_SORT = "sort" in inspect.signature(Desearch.facebook_search).parameters
+
+
 async def _invoke_client(api_key: str, method_name: str, **kwargs: Any) -> Any:
     client = Desearch(api_key=api_key)
     try:
+        if method_name == "facebook_search" and "sort" in kwargs and not _FACEBOOK_SEARCH_TAKES_SORT:
+            raise ValueError("Facebook search sort needs desearch-py 1.13.0 or later")
         method = getattr(client, method_name)
         result = await method(**kwargs)
     finally:
@@ -1294,6 +1302,13 @@ class FacebookToolInput(BaseModel):
         default=None,
         description="action=search: Ad Library keyword, phrase or hashtag.",
     )
+    sort: Optional[Literal["impressions", "recent"]] = Field(
+        default=None,
+        description=(
+            "action=search: ad order. impressions (the API default) puts the most seen "
+            "ads first; recent puts recently started ads first."
+        ),
+    )
     id: Optional[str] = Field(
         default=None, description="action=post: Facebook public post or media ID."
     )
@@ -1328,9 +1343,9 @@ class FacebookTool(BaseTool):
     name: str = "facebook_tool"
     description: str = (
         "Read public Facebook data. Set action to 'search' (Meta Ad Library ads "
-        "matching query, not organic posts), 'post' (one post by id), 'profile' "
-        "(a profile or page by profile_id: ID, username or handle), "
-        "'profile_posts' (a profile's or page's posts by profile_id), 'comments' "
+        "matching query, not organic posts; sort impressions or recent), 'post' (one "
+        "post by id), 'profile' (a profile or page by profile_id: ID, username or "
+        "handle), 'profile_posts' (a profile's or page's posts by profile_id), 'comments' "
         "(comments on a post by post_id; about 10 per page) or 'hashtag' (Meta "
         f"Ad Library ads for tag). {_SOCIAL_PAGING}"
     )
@@ -1341,6 +1356,7 @@ class FacebookTool(BaseTool):
         self,
         action: str,
         query: Optional[str] = None,
+        sort: Optional[str] = None,
         id: Optional[str] = None,
         profile_id: Optional[str] = None,
         post_id: Optional[str] = None,
@@ -1356,6 +1372,7 @@ class FacebookTool(BaseTool):
             "facebook",
             action,
             query=query,
+            sort=sort,
             id=id,
             profile_id=profile_id,
             post_id=post_id,
@@ -1368,6 +1385,7 @@ class FacebookTool(BaseTool):
         self,
         action: str,
         query: Optional[str] = None,
+        sort: Optional[str] = None,
         id: Optional[str] = None,
         profile_id: Optional[str] = None,
         post_id: Optional[str] = None,
@@ -1383,6 +1401,7 @@ class FacebookTool(BaseTool):
             "facebook",
             action,
             query=query,
+            sort=sort,
             id=id,
             profile_id=profile_id,
             post_id=post_id,
@@ -2980,7 +2999,9 @@ class CompanyTaskControlTool(BaseTool):
 # Monitors. desearch-py ships them in 1.13.0, which is not on PyPI yet, so these
 # tools call the /desearch/monitors routes over HTTP (see monitors.py).
 
-_MonitorSource = Literal["web", "x", "reddit", "youtube", "threads", "tiktok"]
+_MonitorSource = Literal[
+    "web", "x", "reddit", "youtube", "threads", "tiktok", "instagram", "facebook", "meta_ads"
+]
 _MonitorInterval = Literal["1h", "3h", "6h", "12h", "1d", "7d"]
 _MonitorEvent = Literal["monitor.items.found", "monitor.run.completed", "monitor.run.failed"]
 
@@ -2990,8 +3011,10 @@ _MONITOR_BILLING = (
     "usage plus 50% (when summary is on). A run holds max_run_cost_usd on the balance and "
     "bills only what it used; a run with no new items still pays for its searches. A "
     "watched account is one feed read per run: an X account about $0.003 (a 20-post "
-    "timeline), a subreddit or YouTube channel $0.00207, TikTok $0.00207 per post (search "
-    "or account)."
+    "timeline), a subreddit, YouTube channel or Threads account $0.00207, TikTok $0.00207 "
+    "per post (search or account), an Instagram account $0.02484 (up to 12 posts) and a "
+    "Facebook page $0.0207 (up to 10 posts). Meta ads cost $0.0207 per 10 Ad Library "
+    "records (meta_ads_count 10 is $0.0207, 30 is $0.0621)."
 )
 _MONITOR_ID_DESCRIPTION = "monitor_id returned when the monitor was created."
 _MONITOR_QUERY_DESCRIPTION = (
@@ -3004,8 +3027,10 @@ _MONITOR_CRITERIA_DESCRIPTION = (
     "screening question."
 )
 _MONITOR_SOURCES_DESCRIPTION = (
-    "Where to look: web, x, reddit, youtube, threads, tiktok (default web and x). A source "
-    "with watched accounts reads them instead of searching."
+    "Where to look: web, x, reddit, youtube, threads, tiktok, instagram, facebook, meta_ads "
+    "(default web and x). A source with watched accounts reads them instead of searching. "
+    "instagram and facebook only read watched accounts, so they need instagram_accounts or "
+    "facebook_pages (HTTP 422 without). meta_ads searches the Meta Ad Library by keyword."
 )
 _MONITOR_INTERVAL_DESCRIPTION = "How often it runs: 1h, 3h, 6h, 12h, 1d or 7d (default 1d)."
 _MONITOR_MIN_SCORE_DESCRIPTION = (
@@ -3047,6 +3072,37 @@ _MONITOR_TIKTOK_SEARCH_NOTE = (
 _MONITOR_TIKTOK_ACCOUNTS_DESCRIPTION = (
     f"TikTok accounts to watch: 'openai', '@openai' or a profile URL. {_MONITOR_ACCOUNTS_NOTE} "
     f"{_MONITOR_TIKTOK_SEARCH_NOTE}"
+)
+_MONITOR_THREADS_ACCOUNTS_DESCRIPTION = (
+    "Threads accounts to watch: 'zuck', '@zuck' or a profile URL, $0.00207 per account per "
+    "run. Threads keyword search returns loosely matched posts, so accounts work better. "
+    f"{_MONITOR_ACCOUNTS_NOTE}"
+)
+_MONITOR_ACCOUNT_ONLY_NOTE = (
+    "1-10, and required while the source is on: it has no keyword search for posts, so "
+    "it reads only these (HTTP 422 without any, on create and on update). Each run reads "
+    "their newest posts; query and criteria still decide what is kept (min_score 0 keeps "
+    "every new post). The API returns the names cleaned."
+)
+_MONITOR_INSTAGRAM_ACCOUNTS_DESCRIPTION = (
+    "Instagram accounts to watch with the instagram source: 'openai', '@openai' or a "
+    "profile URL. Up to 12 posts per account per run, $0.02484 per account. "
+    f"{_MONITOR_ACCOUNT_ONLY_NOTE}"
+)
+_MONITOR_FACEBOOK_PAGES_DESCRIPTION = (
+    "Facebook pages to watch with the facebook source: a page name ('NASA'), a numeric "
+    "page ID or a page URL (profile.php?id=... and /pages/Name/123... become the ID). Up "
+    f"to 10 posts per page per run, $0.0207 per page. {_MONITOR_ACCOUNT_ONLY_NOTE} For ads "
+    "by keyword, use the meta_ads source."
+)
+_MONITOR_META_ADS_NOTE = (
+    "meta_ads searches the Meta Ad Library by keyword, so its query should be a brand, "
+    "product or short phrase such as 'ChatGPT'; a sentence finds nothing. An ad is new the "
+    "first time a run sees it if it started within the last 30 days."
+)
+_MONITOR_META_ADS_COUNT_DESCRIPTION = (
+    "Meta Ad Library records read per run with the meta_ads source: 10, 20 or 30 (default "
+    f"10; 10 is $0.0207, 30 is $0.0621). {_MONITOR_META_ADS_NOTE}"
 )
 _MONITOR_WEBHOOK_URL_DESCRIPTION = (
     "HTTPS URL on a public address that receives new items as signed POSTs. Redirects "
@@ -3132,6 +3188,18 @@ class _MonitorOptionsInput(BaseModel):
     tiktok_accounts: Optional[List[str]] = Field(
         default=None, max_length=10, description=_MONITOR_TIKTOK_ACCOUNTS_DESCRIPTION
     )
+    threads_accounts: Optional[List[str]] = Field(
+        default=None, max_length=10, description=_MONITOR_THREADS_ACCOUNTS_DESCRIPTION
+    )
+    instagram_accounts: Optional[List[str]] = Field(
+        default=None, max_length=10, description=_MONITOR_INSTAGRAM_ACCOUNTS_DESCRIPTION
+    )
+    facebook_pages: Optional[List[str]] = Field(
+        default=None, max_length=10, description=_MONITOR_FACEBOOK_PAGES_DESCRIPTION
+    )
+    meta_ads_count: Optional[Literal[10, 20, 30]] = Field(
+        default=None, description=_MONITOR_META_ADS_COUNT_DESCRIPTION
+    )
 
 
 class MonitorCreateToolInput(_MonitorOptionsInput):
@@ -3180,12 +3248,16 @@ class MonitorCreateTool(_MonitorTool):
     name: str = MONITOR_CREATE_TOOL
     description: str = (
         "Creates a Desearch monitor: a search that reruns on a schedule (every 1h to 7d) "
-        "over the web, X, Reddit, YouTube, Threads and TikTok and keeps only what is new. "
-        "Each run searches the time since the previous run (or reads the newest posts of "
-        "watched accounts: x_accounts, reddit_subreddits, youtube_channels, "
-        "tiktok_accounts), drops everything the monitor has seen before, screens the rest "
-        "for relevance to `query` and each of `criteria`, and keeps items scoring at least "
-        f"`min_score` (0 keeps every new post). {_MONITOR_TIKTOK_SEARCH_NOTE} Kept items go "
+        "over the web, X, Reddit, YouTube, Threads, TikTok and Meta ads (meta_ads, the Meta "
+        "Ad Library), or watches Instagram accounts and Facebook pages, and keeps only what "
+        "is new. Each run searches the time since the previous run (or reads the newest "
+        "posts of watched accounts: x_accounts, reddit_subreddits, youtube_channels, "
+        "tiktok_accounts, threads_accounts, instagram_accounts, facebook_pages), drops "
+        "everything the monitor has seen before, screens the rest for relevance to `query` "
+        "and each of `criteria`, and keeps items scoring at least `min_score` (0 keeps "
+        "every new post). The instagram and facebook sources need instagram_accounts or "
+        "facebook_pages (HTTP 422 without). "
+        f"{_MONITOR_META_ADS_NOTE} {_MONITOR_TIKTOK_SEARCH_NOTE} Kept items go "
         "to `webhook_url` (signed) and "
         f"stay readable with {MONITOR_ITEMS_TOOL}. {_MONITOR_BILLING} With run_now (the "
         "default) the first run is queued at once. Returns the monitor with "
@@ -3212,6 +3284,10 @@ class MonitorCreateTool(_MonitorTool):
         youtube_channels: Optional[List[str]] = None,
         tiktok_count: Optional[int] = None,
         tiktok_accounts: Optional[List[str]] = None,
+        threads_accounts: Optional[List[str]] = None,
+        instagram_accounts: Optional[List[str]] = None,
+        facebook_pages: Optional[List[str]] = None,
+        meta_ads_count: Optional[int] = None,
         webhook_url: Optional[str] = None,
         webhook_events: Optional[List[str]] = None,
         metadata: Optional[Dict[str, str]] = None,
@@ -3237,6 +3313,10 @@ class MonitorCreateTool(_MonitorTool):
             youtube_channels=youtube_channels,
             tiktok_count=tiktok_count,
             tiktok_accounts=tiktok_accounts,
+            threads_accounts=threads_accounts,
+            instagram_accounts=instagram_accounts,
+            facebook_pages=facebook_pages,
+            meta_ads_count=meta_ads_count,
             webhook_url=webhook_url,
             webhook_events=webhook_events,
             metadata=metadata,
@@ -3262,6 +3342,10 @@ class MonitorCreateTool(_MonitorTool):
         youtube_channels: Optional[List[str]] = None,
         tiktok_count: Optional[int] = None,
         tiktok_accounts: Optional[List[str]] = None,
+        threads_accounts: Optional[List[str]] = None,
+        instagram_accounts: Optional[List[str]] = None,
+        facebook_pages: Optional[List[str]] = None,
+        meta_ads_count: Optional[int] = None,
         webhook_url: Optional[str] = None,
         webhook_events: Optional[List[str]] = None,
         metadata: Optional[Dict[str, str]] = None,
@@ -3287,6 +3371,10 @@ class MonitorCreateTool(_MonitorTool):
             youtube_channels=youtube_channels,
             tiktok_count=tiktok_count,
             tiktok_accounts=tiktok_accounts,
+            threads_accounts=threads_accounts,
+            instagram_accounts=instagram_accounts,
+            facebook_pages=facebook_pages,
+            meta_ads_count=meta_ads_count,
             webhook_url=webhook_url,
             webhook_events=webhook_events,
             metadata=metadata,
@@ -3311,8 +3399,9 @@ class MonitorEstimateTool(_MonitorTool):
         "Estimates what a Desearch monitor with these sources, options (watched accounts "
         "included), summary and interval can cost: max_run_cost_usd (the most one run can cost, held on the "
         "balance while it runs), runs_per_month, max_monthly_cost_usd and a breakdown per "
-        "part of a run. Runs usually cost less, since a run bills only what it used. Free "
-        "and instant: it creates nothing."
+        "part of a run (each source, screening and the summary). Runs usually cost less, "
+        "since a run bills only what it used. It prices instagram and facebook without "
+        "accounts as one account each. Free and instant: it creates nothing."
     )
     args_schema: ArgsSchema = MonitorEstimateToolInput
 
@@ -3330,6 +3419,10 @@ class MonitorEstimateTool(_MonitorTool):
         youtube_channels: Optional[List[str]] = None,
         tiktok_count: Optional[int] = None,
         tiktok_accounts: Optional[List[str]] = None,
+        threads_accounts: Optional[List[str]] = None,
+        instagram_accounts: Optional[List[str]] = None,
+        facebook_pages: Optional[List[str]] = None,
+        meta_ads_count: Optional[int] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> Any:
         """Use the tool synchronously."""
@@ -3347,6 +3440,10 @@ class MonitorEstimateTool(_MonitorTool):
             youtube_channels,
             tiktok_count,
             tiktok_accounts,
+            threads_accounts,
+            instagram_accounts,
+            facebook_pages,
+            meta_ads_count,
         )
         return self._call(estimate_monitor, body=body)
 
@@ -3364,6 +3461,10 @@ class MonitorEstimateTool(_MonitorTool):
         youtube_channels: Optional[List[str]] = None,
         tiktok_count: Optional[int] = None,
         tiktok_accounts: Optional[List[str]] = None,
+        threads_accounts: Optional[List[str]] = None,
+        instagram_accounts: Optional[List[str]] = None,
+        facebook_pages: Optional[List[str]] = None,
+        meta_ads_count: Optional[int] = None,
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> Any:
         """Use the tool asynchronously."""
@@ -3381,6 +3482,10 @@ class MonitorEstimateTool(_MonitorTool):
             youtube_channels,
             tiktok_count,
             tiktok_accounts,
+            threads_accounts,
+            instagram_accounts,
+            facebook_pages,
+            meta_ads_count,
         )
         return await self._acall(estimate_monitor, body=body)
 
@@ -3405,8 +3510,11 @@ class MonitorsTool(_MonitorTool):
     description: str = (
         "Lists your Desearch monitors, newest first, or reads one by monitor_id: query, "
         "criteria, sources, interval, status (active or paused, with paused_reason), "
-        "webhook, max_run_cost_usd, next_run_at, the last run and totals (runs, items, "
-        "spent_usd). Pages with next_cursor. Free and instant: it never starts a run."
+        "webhook (url, events, consecutive_failures and last_delivery: the newest delivery "
+        "with its status pending, delivered or failed, attempts, status_code, error and "
+        "next_attempt_at; null before the first), max_run_cost_usd, next_run_at, the last "
+        "run and totals (runs, items, spent_usd). Pages with next_cursor. Free and "
+        "instant: it never starts a run."
     )
     args_schema: ArgsSchema = MonitorsToolInput
 
@@ -3511,6 +3619,10 @@ def _monitor_update_kwargs(
     youtube_channels: Optional[List[str]] = None,
     tiktok_count: Optional[int] = None,
     tiktok_accounts: Optional[List[str]] = None,
+    threads_accounts: Optional[List[str]] = None,
+    instagram_accounts: Optional[List[str]] = None,
+    facebook_pages: Optional[List[str]] = None,
+    meta_ads_count: Optional[int] = None,
     webhook_url: Optional[str] = None,
     webhook_events: Optional[List[str]] = None,
     remove_webhook: bool = False,
@@ -3533,6 +3645,10 @@ def _monitor_update_kwargs(
             youtube_channels,
             tiktok_count,
             tiktok_accounts,
+            threads_accounts,
+            instagram_accounts,
+            facebook_pages,
+            meta_ads_count,
         ),
         "webhook_url": webhook_url,
         "webhook_events": webhook_events,
@@ -3544,12 +3660,13 @@ class MonitorUpdateTool(_MonitorTool):
     name: str = MONITOR_UPDATE_TOOL
     description: str = (
         "Changes a Desearch monitor's settings: query, name, criteria, sources, interval, "
-        "min_score, summary, the web and X options, the webhook (a new URL gets a new "
+        "min_score, summary, the per-source options, the webhook (a new URL gets a new "
         "webhook_secret, returned once; remove_webhook removes it) and metadata. Only the "
         "settings you set change; the per-source options and webhook events are merged with "
         "the current ones, and a new account list replaces that source's watched accounts "
-        "([] stops watching). Free. To pause, resume, run now or delete a monitor, use "
-        f"{MONITOR_CONTROL_TOOL}."
+        "([] stops watching). The API answers HTTP 422 when the monitor as changed would "
+        "have the instagram or facebook source without accounts. Free. To pause, resume, "
+        f"run now or delete a monitor, use {MONITOR_CONTROL_TOOL}."
     )
     args_schema: ArgsSchema = MonitorUpdateToolInput
 
@@ -3572,6 +3689,10 @@ class MonitorUpdateTool(_MonitorTool):
         youtube_channels: Optional[List[str]] = None,
         tiktok_count: Optional[int] = None,
         tiktok_accounts: Optional[List[str]] = None,
+        threads_accounts: Optional[List[str]] = None,
+        instagram_accounts: Optional[List[str]] = None,
+        facebook_pages: Optional[List[str]] = None,
+        meta_ads_count: Optional[int] = None,
         webhook_url: Optional[str] = None,
         webhook_events: Optional[List[str]] = None,
         remove_webhook: bool = False,
@@ -3598,6 +3719,10 @@ class MonitorUpdateTool(_MonitorTool):
             youtube_channels=youtube_channels,
             tiktok_count=tiktok_count,
             tiktok_accounts=tiktok_accounts,
+            threads_accounts=threads_accounts,
+            instagram_accounts=instagram_accounts,
+            facebook_pages=facebook_pages,
+            meta_ads_count=meta_ads_count,
             webhook_url=webhook_url,
             webhook_events=webhook_events,
             remove_webhook=remove_webhook,
@@ -3624,6 +3749,10 @@ class MonitorUpdateTool(_MonitorTool):
         youtube_channels: Optional[List[str]] = None,
         tiktok_count: Optional[int] = None,
         tiktok_accounts: Optional[List[str]] = None,
+        threads_accounts: Optional[List[str]] = None,
+        instagram_accounts: Optional[List[str]] = None,
+        facebook_pages: Optional[List[str]] = None,
+        meta_ads_count: Optional[int] = None,
         webhook_url: Optional[str] = None,
         webhook_events: Optional[List[str]] = None,
         remove_webhook: bool = False,
@@ -3650,6 +3779,10 @@ class MonitorUpdateTool(_MonitorTool):
             youtube_channels=youtube_channels,
             tiktok_count=tiktok_count,
             tiktok_accounts=tiktok_accounts,
+            threads_accounts=threads_accounts,
+            instagram_accounts=instagram_accounts,
+            facebook_pages=facebook_pages,
+            meta_ads_count=meta_ads_count,
             webhook_url=webhook_url,
             webhook_events=webhook_events,
             remove_webhook=remove_webhook,
@@ -3788,7 +3921,10 @@ class MonitorItemsToolInput(BaseModel):
     monitor_id: str = Field(min_length=1, description=_MONITOR_ID_DESCRIPTION)
     source: Optional[_MonitorSource] = Field(
         default=None,
-        description="Only items from this source: web, x, reddit, youtube, threads, tiktok.",
+        description=(
+            "Only items from this source: web, x, reddit, youtube, threads, tiktok, "
+            "instagram, facebook, meta_ads."
+        ),
     )
     limit: int = Field(default=50, ge=1, le=200, description="Items per page (1-200).")
     cursor: Optional[str] = Field(
@@ -3802,10 +3938,15 @@ class MonitorItemsTool(_MonitorTool):
     description: str = (
         "Reads everything a Desearch monitor has kept, newest first: per item its source, "
         "url, title, text (cut to 500 characters), author, published_at, score (0-100) "
-        "with the screening signals, and source data (X likes, reposts, replies, views; "
-        "Reddit subreddit, score, comments; YouTube channel, views; TikTok views, likes, "
-        "comments, shares, duration_s, thumbnail; web domain, highlights; and account, for "
-        "an item read from a watched account). Filter by source; page with next_cursor. Free: it never starts a run."
+        "with the screening signals (relevant, new_info, and criteria when the monitor has "
+        "criteria), and source data (X likes, reposts, replies, views; Reddit subreddit, "
+        "score, comments; YouTube channel, views, thumbnail; TikTok views, likes, comments, "
+        "shares, duration_s, thumbnail; Threads likes; Instagram likes, comments, views, "
+        "media_type, thumbnail; Facebook reactions, comments, shares; Meta ads page, "
+        "active, cta, link (the landing page), platforms, thumbnail, with the ad headline "
+        "as title and url the Ad Library record; web domain, highlights; and account, for "
+        "an item read from a watched account). TikTok and Instagram thumbnail URLs expire. "
+        "Filter by source; page with next_cursor. Free: it never starts a run."
     )
     args_schema: ArgsSchema = MonitorItemsToolInput
 

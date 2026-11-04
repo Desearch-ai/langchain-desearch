@@ -790,6 +790,62 @@ def test_social_inputs_are_validated_before_any_call(
     assert fake_desearch.created == []
 
 
+def test_facebook_search_sort_is_checked_before_any_call(fake_desearch):
+    request = social_request("facebook", "search", query="ai", sort="recent")
+    assert request.kwargs == {"query": "ai", "sort": "recent"}
+    with pytest.raises(ValueError, match="must be one of impressions, recent"):
+        social_request("facebook", "search", query="ai", sort="newest")
+    with pytest.raises(ValidationError, match="Input should be 'impressions' or 'recent'"):
+        FacebookTool().invoke({"action": "search", "query": "ai", "sort": "top"})
+    with pytest.raises(ValidationError, match="sort does not apply to facebook action"):
+        FacebookTool().invoke(
+            {"action": "profile_posts", "profile_id": "facebook", "sort": "recent"}
+        )
+    assert fake_desearch.created == []
+
+
+@pytest.mark.skipif(
+    "sort" not in inspect.signature(Desearch.facebook_search).parameters,
+    reason="the installed desearch-py's facebook_search takes sort from 1.13.0",
+)
+def test_facebook_search_sort_goes_to_the_sdk(fake_desearch, monkeypatch):
+    monkeypatch.setattr("langchain_desearch.tools._FACEBOOK_SEARCH_TAKES_SORT", True)
+    _FakeDesearch.next_cursor = NEXT_CURSOR
+
+    page = FacebookTool().invoke(
+        {"action": "search", "query": "ChatGPT", "sort": "recent", "count": 5, "cursor": CURSOR}
+    )
+    assert _last_call(fake_desearch) == (
+        "facebook_search",
+        {"query": "ChatGPT", "sort": "recent", "count": 5, "cursor": CURSOR, "include_metadata": True},
+    )
+    assert page["next_cursor"] == NEXT_CURSOR
+
+    asyncio.run(FacebookTool().ainvoke({"action": "search", "query": "ChatGPT", "sort": "impressions"}))
+    assert _last_call(fake_desearch) == (
+        "facebook_search",
+        {"query": "ChatGPT", "sort": "impressions", "include_metadata": True},
+    )
+
+    # Without sort the request is the same as before.
+    FacebookTool().invoke({"action": "search", "query": "ChatGPT"})
+    assert _last_call(fake_desearch) == (
+        "facebook_search",
+        {"query": "ChatGPT", "include_metadata": True},
+    )
+
+
+def test_facebook_search_sort_on_an_older_sdk_says_what_it_needs(fake_desearch, monkeypatch):
+    monkeypatch.setattr("langchain_desearch.tools._FACEBOOK_SEARCH_TAKES_SORT", False)
+
+    result = FacebookTool().invoke({"action": "search", "query": "ChatGPT", "sort": "recent"})
+
+    assert result == (
+        "An error occurred while calling Desearch: "
+        "Facebook search sort needs desearch-py 1.13.0 or later"
+    )
+
+
 def test_social_run_validates_without_the_schema(fake_desearch):
     # Direct _run calls skip the args schema; the action check still applies.
     with pytest.raises(ValueError, match="needs video_id"):

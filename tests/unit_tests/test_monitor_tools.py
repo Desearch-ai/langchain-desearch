@@ -254,12 +254,16 @@ def test_monitor_create_without_run_now_or_webhook(monitor_api):
         {"query": "valid query", "criteria": ["a"] * 6},
         {"query": "valid query", "criteria": ["a" * 301]},
         {"query": "valid query", "sources": []},
-        {"query": "valid query", "sources": ["facebook"]},
+        {"query": "valid query", "sources": ["linkedin"]},
         {"query": "valid query", "tiktok_count": 15},
         {"query": "valid query", "x_accounts": [f"user{i}" for i in range(11)]},
         {"query": "valid query", "reddit_subreddits": ["LocalLLaMA", " "]},
         {"query": "valid query", "youtube_channels": [f"@c{i}" for i in range(11)]},
         {"query": "valid query", "tiktok_accounts": [""]},
+        {"query": "valid query", "threads_accounts": [f"t{i}" for i in range(11)]},
+        {"query": "valid query", "instagram_accounts": ["openai", ""]},
+        {"query": "valid query", "facebook_pages": [f"page{i}" for i in range(11)]},
+        {"query": "valid query", "meta_ads_count": 15},
         {"query": "valid query", "interval": "2h"},
         {"query": "valid query", "min_score": 101},
         {"query": "valid query", "web_count": 12},
@@ -734,7 +738,7 @@ def test_monitor_items_defaults_and_async(monitor_api):
 
 def test_monitor_items_rejects_an_unknown_source():
     with pytest.raises(ValidationError):
-        MonitorItemsToolInput(monitor_id=MONITOR_ID, source="facebook")
+        MonitorItemsToolInput(monitor_id=MONITOR_ID, source="linkedin")
 
 
 def test_compact_item_drops_empty_fields():
@@ -952,3 +956,314 @@ def test_monitor_tool_descriptions_cover_accounts_and_tiktok():
     assert "min_score 0" in fields["x_accounts"]["description"]
     assert "x_count is not used" in fields["x_accounts"]["description"]
     assert "ranks by relevance" in fields["tiktok_accounts"]["description"]
+
+
+SOCIAL = {
+    "threads": {"accounts": ["zuck"]},
+    "instagram": {"accounts": ["openai", "nasa"]},
+    "facebook": {"pages": ["NASA", "100064869009429"]},
+    "meta_ads": {"count": 20},
+}
+SOCIAL_SOURCES = ["threads", "instagram", "facebook", "meta_ads"]
+
+
+def test_monitor_create_watches_instagram_facebook_threads_and_searches_meta_ads(monitor_api):
+    monitor_api.add(
+        "POST",
+        "/desearch/monitors",
+        201,
+        _monitor(sources=SOCIAL_SOURCES, options=SOCIAL, webhook=None),
+    )
+
+    result = MonitorCreateTool(base_url=monitor_api.base_url).invoke(
+        {
+            "query": "ChatGPT",
+            "sources": SOCIAL_SOURCES,
+            "threads_accounts": ["@zuck"],
+            "instagram_accounts": ["@openai", "https://www.instagram.com/nasa/"],
+            "facebook_pages": [
+                "https://www.facebook.com/NASA",
+                "https://www.facebook.com/profile.php?id=100064869009429",
+            ],
+            "meta_ads_count": 20,
+            "run_now": False,
+        }
+    )
+
+    (call,) = monitor_api.calls("POST", "/desearch/monitors")
+    # Names go as given; the API cleans them.
+    assert call["json"] == {
+        "query": "ChatGPT",
+        "sources": SOCIAL_SOURCES,
+        "options": {
+            "threads": {"accounts": ["@zuck"]},
+            "instagram": {"accounts": ["@openai", "https://www.instagram.com/nasa/"]},
+            "facebook": {
+                "pages": [
+                    "https://www.facebook.com/NASA",
+                    "https://www.facebook.com/profile.php?id=100064869009429",
+                ]
+            },
+            "meta_ads": {"count": 20},
+        },
+        "run_now": False,
+    }
+    assert result["sources"] == SOCIAL_SOURCES
+    assert result["options"] == SOCIAL
+
+
+@pytest.mark.parametrize(
+    "source, detail",
+    [
+        (
+            "instagram",
+            "Instagram watches accounts: add at least one in options.instagram.accounts",
+        ),
+        ("facebook", "Facebook watches pages: add at least one in options.facebook.pages"),
+    ],
+)
+def test_monitor_create_account_only_source_without_accounts_is_the_api_422(
+    monitor_api, source, detail
+):
+    # The API decides (on update it checks the monitor as patched), so the tool sends it.
+    monitor_api.add(
+        "POST",
+        "/desearch/monitors",
+        422,
+        {"detail": [{"type": "value_error", "loc": ["body"], "msg": f"Value error, {detail}"}]},
+    )
+
+    result = MonitorCreateTool(base_url=monitor_api.base_url).invoke(
+        {"query": "NASA launches", "sources": [source], "run_now": False}
+    )
+
+    (call,) = monitor_api.calls("POST", "/desearch/monitors")
+    assert call["json"] == {"query": "NASA launches", "sources": [source], "run_now": False}
+    assert result.startswith("An error occurred while calling Desearch: HTTP 422: ")
+    assert detail in result
+
+
+def test_monitor_update_empty_pages_on_a_facebook_monitor_is_the_api_422(monitor_api):
+    detail = "Facebook watches pages: add at least one in options.facebook.pages"
+    monitor_api.add(
+        "GET", MONITOR_PATH, 200, _monitor(sources=SOCIAL_SOURCES, options=SOCIAL)
+    )
+    monitor_api.add("PATCH", MONITOR_PATH, 422, {"detail": detail})
+
+    result = MonitorUpdateTool(base_url=monitor_api.base_url).invoke(
+        {"monitor_id": MONITOR_ID, "facebook_pages": []}
+    )
+
+    (patch,) = monitor_api.calls("PATCH")
+    assert patch["json"]["options"]["facebook"] == {"pages": []}
+    assert result == f"An error occurred while calling Desearch: HTTP 422: {detail}"
+
+
+def test_monitor_update_merges_the_new_source_options(monitor_api):
+    monitor_api.add(
+        "GET", MONITOR_PATH, 200, _monitor(sources=SOCIAL_SOURCES, options=SOCIAL)
+    )
+    monitor_api.add(
+        "PATCH", MONITOR_PATH, 200, _monitor(sources=SOCIAL_SOURCES, options=SOCIAL)
+    )
+
+    MonitorUpdateTool(base_url=monitor_api.base_url).invoke(
+        {"monitor_id": MONITOR_ID, "meta_ads_count": 30, "instagram_accounts": ["natgeo"]}
+    )
+
+    (patch,) = monitor_api.calls("PATCH")
+    assert patch["json"] == {
+        "options": {
+            "threads": {"accounts": ["zuck"]},
+            # A new list replaces the accounts; the other sources are kept.
+            "instagram": {"accounts": ["natgeo"]},
+            "facebook": {"pages": ["NASA", "100064869009429"]},
+            "meta_ads": {"count": 30},
+        }
+    }
+
+
+def test_monitor_estimate_prices_the_new_sources(monitor_api):
+    breakdown = {
+        "threads": 0.00207,
+        "instagram": 0.04968,
+        "facebook": 0.0207,
+        "meta_ads": 0.0414,
+        "screening": 0.0001,
+    }
+    estimate = {
+        "max_run_cost_usd": 0.11395,
+        "runs_per_month": 30,
+        "max_monthly_cost_usd": 3.4185,
+        "breakdown": breakdown,
+    }
+    monitor_api.add("POST", "/desearch/monitors/estimate", 200, estimate)
+
+    result = MonitorEstimateTool(base_url=monitor_api.base_url).invoke(
+        {
+            "sources": SOCIAL_SOURCES,
+            "threads_accounts": ["zuck"],
+            "instagram_accounts": ["openai", "nasa"],
+            "facebook_pages": ["NASA"],
+            "meta_ads_count": 20,
+        }
+    )
+
+    (call,) = monitor_api.calls("POST")
+    assert call["json"] == {
+        "sources": SOCIAL_SOURCES,
+        "options": {
+            "threads": {"accounts": ["zuck"]},
+            "instagram": {"accounts": ["openai", "nasa"]},
+            "facebook": {"pages": ["NASA"]},
+            "meta_ads": {"count": 20},
+        },
+    }
+    assert result["breakdown"] == breakdown
+
+
+DELIVERY = {
+    "event": "monitor.items.found",
+    "status": "pending",
+    "attempts": 2,
+    "status_code": 503,
+    "error": None,
+    "created_at": "2026-11-03T09:00:41Z",
+    "next_attempt_at": "2026-11-03T09:06:41Z",
+    "delivered_at": None,
+}
+
+
+def _hook(**extra):
+    return {
+        "url": "https://example.com/hooks/desearch",
+        "events": ["monitor.items.found"],
+        "consecutive_failures": 0,
+        **extra,
+    }
+
+
+@pytest.mark.parametrize(
+    "webhook, expected",
+    [
+        # The newest delivery, as the API returns it.
+        (_hook(last_delivery=DELIVERY), _hook(last_delivery=DELIVERY)),
+        # Null before the first delivery: kept, so it reads as "nothing delivered yet".
+        (_hook(last_delivery=None), _hook(last_delivery=None)),
+        # An API that does not report it.
+        (_hook(consecutive_failures=1), _hook(consecutive_failures=1)),
+    ],
+)
+def test_monitor_webhook_passes_last_delivery_through(monitor_api, webhook, expected):
+    monitor_api.add("GET", MONITOR_PATH, 200, _monitor(webhook=webhook))
+
+    result = MonitorsTool(base_url=monitor_api.base_url).invoke({"monitor_id": MONITOR_ID})
+
+    assert result["webhook"] == expected
+
+
+def test_monitor_without_a_webhook_has_no_last_delivery(monitor_api):
+    monitor_api.add("GET", "/desearch/monitors", 200, {"monitors": [_monitor(webhook=None)]})
+
+    result = MonitorsTool(base_url=monitor_api.base_url).invoke({})
+
+    assert "webhook" not in result["monitors"][0]
+
+
+def test_monitor_items_filter_meta_ads_and_keep_each_sources_data(monitor_api):
+    ad = {
+        **ITEM,
+        "item_id": "2001",
+        "source": "meta_ads",
+        "url": "https://www.facebook.com/ads/library/?id=1234567890",
+        "title": "Try ChatGPT for work",
+        "text": "Get answers faster.",
+        "signals": {"relevant": 0.96},
+        "data": {
+            "page": "OpenAI",
+            "active": True,
+            "cta": "Learn more",
+            "link": "https://chatgpt.com/business",
+            "platforms": ["facebook", "instagram"],
+            "thumbnail": "https://scontent.xx.fbcdn.net/ad.jpg",
+        },
+    }
+    instagram = {
+        **ITEM,
+        "item_id": "2002",
+        "source": "instagram",
+        "data": {
+            "likes": 900,
+            "comments": 12,
+            "views": 4000,
+            "media_type": "video",
+            "thumbnail": "https://scontent.cdninstagram.com/t.jpg",
+            "account": "openai",
+        },
+    }
+    facebook = {
+        **ITEM,
+        "item_id": "2003",
+        "source": "facebook",
+        "data": {"reactions": 310, "comments": 25, "shares": 7, "account": "NASA"},
+    }
+    threads = {
+        **ITEM,
+        "item_id": "2004",
+        "source": "threads",
+        "data": {"likes": 44, "account": "zuck"},
+    }
+    monitor_api.add(
+        "GET",
+        f"{MONITOR_PATH}/items",
+        200,
+        {"items": [ad, instagram, facebook, threads], "next_cursor": None},
+    )
+
+    result = MonitorItemsTool(base_url=monitor_api.base_url).invoke(
+        {"monitor_id": MONITOR_ID, "source": "meta_ads"}
+    )
+
+    (call,) = monitor_api.calls("GET")
+    assert call["query"] == {"source": "meta_ads", "limit": "50"}
+    first, second, third, fourth = result["items"]
+    assert first["title"] == "Try ChatGPT for work"
+    assert first["data"] == ad["data"]
+    assert second["data"] == instagram["data"]
+    assert third["data"] == facebook["data"]
+    assert fourth["data"] == threads["data"]
+
+
+@pytest.mark.parametrize("source", ["instagram", "facebook", "meta_ads"])
+def test_monitor_items_accept_the_new_sources(source):
+    assert MonitorItemsToolInput(monitor_id=MONITOR_ID, source=source).source == source
+
+
+def test_monitor_tool_descriptions_cover_the_social_sources():
+    create = MonitorCreateTool().description
+    for text in (
+        "meta_ads",
+        "instagram_accounts",
+        "facebook_pages",
+        "threads_accounts",
+        "HTTP 422",
+        "a sentence finds nothing",
+        "$0.02484",
+        "$0.0207",
+        "$0.0621",
+    ):
+        assert text in create, text
+    fields = MonitorCreateToolInput.model_json_schema()["properties"]
+    assert "instagram" in fields["sources"]["description"]
+    assert "required while the source is on" in fields["instagram_accounts"]["description"]
+    assert "$0.02484 per account" in fields["instagram_accounts"]["description"]
+    assert "$0.0207 per page" in fields["facebook_pages"]["description"]
+    assert "profile.php?id=" in fields["facebook_pages"]["description"]
+    assert "$0.00207 per account" in fields["threads_accounts"]["description"]
+    assert fields["meta_ads_count"]["anyOf"][0]["enum"] == [10, 20, 30]
+    assert "'ChatGPT'" in fields["meta_ads_count"]["description"]
+    items = MonitorItemsTool().description
+    for text in ("reactions", "media_type", "cta", "platforms", "Ad Library record", "criteria"):
+        assert text in items, text
+    assert "last_delivery" in MonitorsTool().description
+    assert "HTTP 422" in MonitorUpdateTool().description
