@@ -5,6 +5,44 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - unreleased
+
+> **Waits for the Company Search API release that adds `max_cost_usd` and
+> `continue_from` (desearch-public-api#624).** Until then the API refuses a
+> search that sends either one with HTTP 422. The company tools call the
+> `/desearch/companies` routes over HTTP, so this release needs no new
+> desearch-py; it has the same requirement as 1.3.0 (`desearch-py>=1.11.0`,
+> not on PyPI yet). If 1.3.0 is still unpublished, 1.4.0 ships both.
+
+### Added
+
+- `company_search_tool` takes `max_cost_usd`, a search budget in USD (above 0,
+  at most 100). Without it, a search stops once it costs more than the
+  companies it found pay for (`coverage_limited`, `cost_limit`). With it, the
+  whole budget is reserved, the search keeps going until it delivers `count`
+  or spends the budget, and its search effort is billed up to the budget even
+  when it finds few companies or none. The field description tells the agent
+  to set it only when the user agreed to that budget. A budget below what
+  `count` reserves is refused by the API (HTTP 422, with the minimum).
+- `company_search_tool` takes `continue_from`, the `task_id` of an ended
+  Company Search: a new search that leaves out every company that one
+  delivered or held for review. It must be a task_id (UUID) and cannot be
+  combined with `task_id`, which waits on a search instead.
+- Both are sent only when given. The compact task returns them as
+  `max_cost_usd` and `continue_from` (from `task.request`).
+- After a search that stopped before `count` (`coverage_limited`),
+  `next_step` offers a search with `continue_from`, says when the search
+  spent its budget or hit the cost limit, and repeats that `max_cost_usd`
+  needs the user's agreement. Company Enrich gets no such offer.
+- The `query` description says how to restrict a search to named companies:
+  name them with their websites.
+
+### Fixed
+
+- The `company_search_tool` description and the README said Company Search
+  bills a minimum of 2 companies when it delivers any. Since the 2026-11-02
+  price release the minimum is 1, as for Company Enrich.
+
 ## [1.3.0] - unreleased
 
 > **Do not publish 1.3.0 before desearch-py 1.11.0 is on PyPI.** This release
