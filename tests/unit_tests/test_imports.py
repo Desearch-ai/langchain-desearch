@@ -22,6 +22,13 @@ EXPECTED_ALL = [
     "CompanyEnrichTool",
     "CompanyTasksTool",
     "CompanyTaskControlTool",
+    "MonitorCreateTool",
+    "MonitorEstimateTool",
+    "MonitorsTool",
+    "MonitorUpdateTool",
+    "MonitorControlTool",
+    "MonitorRunsTool",
+    "MonitorItemsTool",
 ]
 
 
